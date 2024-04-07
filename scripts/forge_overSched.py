@@ -129,6 +129,7 @@ class OverSchedForge(scripts.Script):
         self.enabled = False
         self.get_sigmas_backup = None
 
+
     def title(self):
         return "Scheduler Override"
 
@@ -167,13 +168,19 @@ class OverSchedForge(scripts.Script):
         self.enabled = enabled
 
         if not enabled:
+            if self.get_sigmas_backup is not None:
+                K.KDiffusionSampler.get_sigmas = self.get_sigmas_backup
             return
 
         OverSchedForge.scheduler = scheduler
         OverSchedForge.custom = custom
 
 #        print (k_diffusion.k_diffusion_scheduler)
-        self.get_sigmas_backup = K.KDiffusionSampler.get_sigmas
+        #   only backup get_sigma if it is differnt
+        #   a fail during processing (i.e. bug in extension) means postprocess doesn't get called
+        #   so original never restored - need a better way to catch this
+        if self.get_sigmas_backup != K.KDiffusionSampler.get_sigmas:
+            self.get_sigmas_backup = K.KDiffusionSampler.get_sigmas
         K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
 
 
@@ -186,8 +193,7 @@ class OverSchedForge(scripts.Script):
         return
 
     def postprocess(self, params, processed, *args):
-        if self.get_sigmas_backup is not None:
+        if self.enabled and self.get_sigmas_backup is not None:
             K.KDiffusionSampler.get_sigmas = self.get_sigmas_backup
-
         return
 
