@@ -13,7 +13,7 @@ Some extra schedulers have been added:
 * *phi* is a slightly tweaked version of the golden scheduler from [Extraltodeus](https://github.com/Extraltodeus/sigmas_tools_and_the_golden_scheduler).
 * *fibonacci* is a reverse fibonacci curve, scaled down by step to keep it under control a little longer. Even so, high step counts will result in a long run of very low sigmas - i.e. minimal change to results.
 * *continuous VP* is also in k-diffusers, normally unused. From brief testing, seems worthwhile.
-* *squared* is an ultra-simple curve: step is normalised to 1.0 -> 0.0, squared, then scaled to *sigma_max*-> *sigma_min*. Again, from brief testing, seems good. Equivalent to custom function: M*(1-x)*(1-x) + m
+* *squared* is an ultra-simple curve: step is normalised to 1.0 -> 0.0, squared, then scaled to *sigma_max*-> *sigma_min*. Again, from brief testing, seems good.
 * *linear* is not even a curve. It's *squared* without the squaring. Sometimes has use, often does not.
 * *custom* allows user-generated schedules using standard Python code. The custom function is evaluated at each step. The following variables are defined:
 	* *m*: minimum sigma (adjustable in **Settings**, usually ~0.03)
@@ -23,6 +23,10 @@ Some extra schedulers have been added:
 	* *x*: step / (total steps - 1)
 	* *phi*: (1 + sqrt(5)) / 2
 	more may be added later
+### custom examples ###
+* A specific list of sigmas can be entered as: [*n1*, *n2*, *n3*, ...][s].
+* A normalised list (between 0.0 and 1.0) can be entered and scaled to the standard range with: m + (M-m)*[*n1*, *n2*, *n3*, ...][s]
+* *squared* is equivalent to: m + (M-m)*(1-x)**2
 	
 ---
 ## to do? ##
