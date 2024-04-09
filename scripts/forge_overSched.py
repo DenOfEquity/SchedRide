@@ -139,10 +139,23 @@ class OverSchedForge(scripts.Script):
 
     def ui(self, *args, **kwargs):
         with gr.Accordion(open=False, label=self.title()):
-            with gr.Row():
+            with gr.Row(equalHeight=True):
                 enabled = gr.Checkbox(value=False, label='Enabled', scale=0)
                 scheduler = gr.Dropdown(["None", "karras", "exponential", "polyexponential", "phi", "fibonacci", "continuous VP", "squared", "linear", "custom"], value="phi", type='value', label='Scheduler choice', scale=0)
-                custom = gr.Textbox(value='M * (1-x)**((2-x)*phi) + m * (x)**((2-x)*phi)', max_lines=1, label='custom function', scale=1)
+                custom = gr.Textbox(value='M * (1-x)**((2-x)*phi) + m * (x)**((2-x)*phi)', max_lines=1, label='custom function', scale=1, visible=False)
+
+            def show_custom(scheduler):
+                if scheduler == "custom":
+                    return gr.update(visible=True)
+                else:
+                    return gr.update(visible=False)
+
+            scheduler.change(
+                fn=show_custom,
+                inputs=scheduler,
+                outputs=custom
+            )
+
 
         self.infotext_fields = [
             (enabled, lambda d: enabled.update(value=("os_enabled" in d))),
