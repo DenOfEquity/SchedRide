@@ -15,6 +15,7 @@ Some extra schedulers have been added:
 * *continuous VP* is also in k-diffusers, normally unused. From brief testing, seems worthwhile.
 * ~~*squared* is an ultra-simple curve: step is normalised to 1.0 -> 0.0, squared, then scaled to *sigma_max*-> *sigma_min*. Again, from brief testing, seems good. Equivalent to custom function: m + (M-m)*(1-x)*(1-x)~~
 * *4th power, thresholded* is a simple curve: step is normalised to 1.0 -> 0.0, taken to fourth power, maximum taken compared to linear scaled by 4/n,  then scaled to *sigma_max*-> *sigma_min*. Again, from brief testing, seems good. Equivalent to custom function: m + (M-m)*max((1-x)**4, (1-x)/(0.25*n))
+* *LCM to linear* starts with LCM up to change step, then linear to minimum sigma. Actually testing switching to linear one step earlier, to retain higher sigmas and hopefully add detail with the second sampler. Experimental.
 * ~~*linear* is not even a curve. It's *squared* without the squaring. Sometimes has use, often does not.~~
 * *custom* allows user-generated schedules using standard Python code. The custom function is evaluated at each step. The following variables are defined:
 	* *m*: minimum sigma (adjustable in **Settings**, usually ~0.03)

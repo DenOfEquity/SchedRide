@@ -11,8 +11,9 @@ import modules.sd_samplers_extra
 import modules.sd_samplers_lcm
 import modules.sd_samplers_timesteps
 import torch, math
+##import pickle
 
-import extensions.Euler_Smea_Dyn_Sampler.scripts.smea_sampling as EulerDy
+import extensions.Euler_Smea_Dyn_Sampler.smea_sampling as EulerDy
 
 from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
 
@@ -33,13 +34,11 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         ('DPM++ 3M SDE',k_diffusion.sampling.sample_dpmpp_3m_sde,       {'discard_next_to_last_sigma': True, "brownian_noise": True}                    ),
         ('DPM fast',    k_diffusion.sampling.sample_dpm_fast,           {"uses_ensd": True}                                                             ),
         ('DPM adaptive',k_diffusion.sampling.sample_dpm_adaptive,       {"uses_ensd": True}                                                             ),
-        ('LMS',         k_diffusion.sampling.sample_lms,                {}                                                                              ),
         ('Restart',     modules.sd_samplers_extra.restart_sampler,      {"second_order": True}                                                          ),
         ('LCM',         modules.sd_samplers_lcm.sample_lcm,             {}                                                                              ),
         ('Euler Dy',        EulerDy.sample_euler_dy,                    {}                                                                              ),
         ('Euler SMEA Dy',   EulerDy.sample_euler_smea_dy,               {}                                                                              ),
         #19
-        #Euler Dy by importing extension?
 
 #        ('DDIM',        modules.sd_samplers_timesteps.sd_samplers_timesteps_impl.ddim,  {}                                                              ),
 #        ('PLMS',        modules.sd_samplers_timesteps.sd_samplers_timesteps_impl.plms,  {}                                                              ),
@@ -57,6 +56,32 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         self.model_wrap_cfg = CFGDenoiserKDiffusion(self)
         self.model_wrap = self.model_wrap_cfg.inner_model
 
+
+
+    def get_sigmas_LCM(n, sigmas, sigma_min, sigma_max, device='cpu'):
+        ##  input sigmas are LCM sigmas calculated to change point, then appended with zero
+
+
+        listSigmas = sigmas.tolist()
+        newSigmas = []
+
+        totalLCMsigmas = len(sigmas) - 2                    #   should be -1, but want higher sigmas. currently generating +1 LCM sigmas, so this is correct
+        remainingSteps = n - totalLCMsigmas
+        lastLCMsigma = listSigmas[totalLCMsigmas-1]
+        delta = (lastLCMsigma - 0.0292) / remainingSteps    #   sigma_min changed by LCM stuff?
+
+        i = 0
+        while i < n:
+            if i < totalLCMsigmas:
+                newSigmas.append(listSigmas[i])
+            else:
+                lastLCMsigma -= delta
+                newSigmas.append(lastLCMsigma)
+
+            i += 1
+        newSigmas.append(0.0)
+
+        return torch.tensor(newSigmas, device='cuda:0')
 
 
     def get_sigmas_exponential_thresholded(n, sigma_min, sigma_max, device='cpu'):
@@ -105,6 +130,137 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         sigmas += sigma_min
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
+    def get_sigmas_4xlinear(n, sigma_min, sigma_max, device='cpu'):
+        dropRate1 = 0.75#825
+        dropRate2 = 0.75#55
+        dropRate3 = 0.01
+        b1start = 0
+        b2start = n/4
+        b3start = n/2
+        b4start = 3*n/4
+
+        b1_v = 1.0
+        b2_v = b1_v * (1.0 - dropRate1)
+        b3_v = b2_v * (1.0 - dropRate2)
+        b4_v = b3_v * (1.0 - dropRate3)
+
+        sigmaList = []
+
+        i = 0
+        br = b2start - b1start
+        while i < br:
+            r = b2_v + (b1_v - b2_v) * (br - i) / (br)
+            sigmaList.append(r)
+            i += 1
+
+        i = 0
+        br = b3start - b2start
+        while i < br:
+            r = b3_v + (b2_v - b3_v) * (br - i) / (br)
+            sigmaList.append(r)
+            i += 1
+
+        i = 0
+        br = b4start - b3start
+        while i < br:
+            r = b4_v + (b3_v - b4_v) * (br - i) / (br)
+            sigmaList.append(r)
+            i += 1
+
+        i = 0
+        br = n - b4start
+        while i < br:
+            r = b4_v * (br - (i + 1)) / (br)
+            sigmaList.append(r)
+            i += 1
+
+        sigmas = torch.tensor(sigmaList, device=device)
+        sigmas *= (sigma_max - sigma_min)
+        sigmas += sigma_min
+
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
+
+    def get_sigmas_geometric(n, sigma_min, sigma_max, device='cpu'):
+        #this is same as exponential
+        K = (sigma_min / sigma_max)**(1/(n-1))
+
+        res = sigma_max
+        sigmaList = [res]
+        i = 1
+        while (i < n/2):    #best switch point?
+            res *= K
+            sigmaList.append(res)
+            i += 1
+
+        #   switch to linear at mid point - maybe too late?
+        #   similar idea to expo_thresholded - maybe tweak switch point
+        # possibly some value to this, certainly value to idea of preventing exponential drop off after some point
+        #stopping one step early?
+        delta = (res - sigma_min) / (n - i)
+        while (i < n):
+            res -= delta             #last step: i = n-1
+            sigmaList.append(res)
+            i += 1
+            
+
+        sigmas = torch.tensor(sigmaList, device=device)
+        print(sigmas)
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
+       
+
+
+    def get_sigmas_4xnonlinear(n, sigma_min, sigma_max, device='cpu'):
+        target1 = 0.32
+        target2 = 0.08
+        target3 = target2
+        b1start = 0
+        b2start = int(n/4)
+        b3start = int(n/2)
+        b4start = int(3*n/4)
+
+        sigmaList = []
+
+#low ** (1/(n-1))  -> n steps from 1.0 to low
+#sigmax * k**n = sigmin
+        #log sigmax * kn = log sigmin
+        K=(sigmin/sigmax)**(1/n)
+        
+        i = 0
+        r = 1.0
+        br = b4start - b3start
+        scale = target1 ** (1/(br-1))
+        while i < br:
+            sigmaList.append(r)
+            r *= scale
+            i += 1
+
+        i = 0
+        br = b3start - b2start
+        scale = (target1 - target2) ** (1/(br-1))
+        while i < br:
+            sigmaList.append(r)
+            r *= scale
+            i += 1
+
+        i = 0
+        br = b4start - b3start
+        while i < br:
+            sigmaList.append(r)
+            i += 1
+
+        i = 0
+        br = n - b4start
+        b4v = r
+        while i < br:
+            r = b4v * (br -(i + 1)) / (br)
+            sigmaList.append(r)
+            i += 1
+
+        sigmas = torch.tensor(sigmaList, device=device)
+        sigmas *= (sigma_max - sigma_min)
+        sigmas += sigma_min
+        print(sigmas)
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_custom(n, sigma_min, sigma_max, device='cpu'):
         sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
@@ -153,6 +309,11 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
             sigmas = k_diffusion.sampling.get_sigmas_vp(n=steps, device=shared.device)
         elif self.config is not None and OverSchedForge.scheduler == '4th power thresholded':
             sigmas = patchedKDiffusionSampler.get_sigmas_fourth(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
+##        elif self.config is not None and OverSchedForge.scheduler == '4x linear':
+##            sigmas = patchedKDiffusionSampler.get_sigmas_geometric(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
+        elif self.config is not None and OverSchedForge.scheduler == 'LCM to linear':
+            sigmas = self.model_wrap.get_sigmas(1 + int(OverSchedForge.step * steps))
+            sigmas = patchedKDiffusionSampler.get_sigmas_LCM(n=steps, sigmas=sigmas, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
         elif self.config is not None and OverSchedForge.scheduler == 'custom':
             sigmas = patchedKDiffusionSampler.get_sigmas_custom(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
         else:
@@ -180,11 +341,13 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         sigmas = self.get_sigmas(p, steps).to(x.device)
 
+
         if opts.sgm_noise_multiplier:
             p.extra_generation_params["SGM noise multiplier"] = True
             x = x * torch.sqrt(1.0 + sigmas[0] ** 2.0)
         else:
             x = x * sigmas[0]
+
 
         extra_params_kwargs = self.initialize(p)
         
@@ -205,12 +368,6 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         s1 = torch.tensor(listSigmas[0:stepToChange+1], device='cuda:0')             #   need sigma+1, and makes progress bar count right
         s2 = torch.tensor(listSigmas[stepToChange:len(sigmas)], device='cuda:0')
-
-
-#UI build a list of sampler, steps (until done) - could get index directly from UI, saving the search
-# ie:   'Euler', 4
-#       'DPM++ SDE', 8
-#       'Heun', 20
 
         parameters = inspect.signature(self.func).parameters
 
@@ -239,19 +396,9 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 #self.sampler_extra_args might need updating
 #some samplers might need more arguments to be set
 #but how useful are they anyway?
-        
-##        nextFunc = 'DPM++ SDE'
-##        samplerIndex = 0
-##        while samplerIndex < len(patchedKDiffusionSampler.samplers_list):
-##            if patchedKDiffusionSampler.samplers_list[samplerIndex][0] == nextFunc:
-##                self.func = patchedKDiffusionSampler.samplers_list[samplerIndex][1]
-##                extraParams = patchedKDiffusionSampler.samplers_list[samplerIndex][2]
-##                break
-##
-##            samplerIndex += 1
 
-#        if samplerIndex == len(K.samplers_k_diffusion):
-            #   not found, major error
+        #euler dy slightly different results with switch
+
 
         samplerIndex = OverSchedForge.samplerIndex
         self.func = patchedKDiffusionSampler.samplers_list[samplerIndex][1]
@@ -289,7 +436,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 #add UI for these values?? overkill
 
 
-        if samplerIndex == 3 or samplerIndex == 5 or samplerIndex == 6 :     #euler, heun, dpm2, euler dy *2
+        if samplerIndex == 3 or samplerIndex == 5 or samplerIndex == 6 :     #euler, heun, dpm2
             extra_params_kwargs['s_churn'] = shared.opts.s_churn
             extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
             extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
@@ -307,8 +454,11 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         samples = self.launch_sampling(steps, lambda: self.func(self.model_wrap_cfg, samples, extra_args=self.sampler_extra_args,
                                                                 disable=False, callback=self.callback_state, **extra_params_kwargs))
 
-        self.add_infotext(p)
+##        #save
+##        with open("c:\\temp\\latent.pkl", "wb") as file:
+##            pickle.dump(samples, file, pickle.HIGHEST_PROTOCOL)
 
+        self.add_infotext(p)
         sampling_cleanup(unet_patcher)
 
         return samples
@@ -348,7 +498,7 @@ class OverSchedForge(scripts.Script):
         with gr.Accordion(open=False, label=self.title()):
             with gr.Row(equalHeight=True):
                 enabled = gr.Checkbox(value=False, label='Enabled', scale=0)
-                scheduler = gr.Dropdown(["None", "karras", "exponential", "exponential thresholded", "polyexponential", "phi", "fibonacci", "continuous VP", "4th power thresholded", "custom"], value="phi", type='value', label='Scheduler choice', scale=0)
+                scheduler = gr.Dropdown(["None", "karras", "exponential", "exponential thresholded", "polyexponential", "phi", "fibonacci", "continuous VP", "4th power thresholded", "LCM to linear", "custom"], value="phi", type='value', label='Scheduler choice', scale=0)
                 custom = gr.Textbox(value='M * (1-x)**((2-x)*phi) + m * (x)**((2-x)*phi)', max_lines=1, label='custom function', scale=1, visible=False)
             with gr.Row(equalHeight=True):
                 sampler = gr.Dropdown(samplerList, value="None", type='index', label='Sampler choice', scale=1)
@@ -403,6 +553,7 @@ class OverSchedForge(scripts.Script):
         #   only backup get_sigma if it is differnt
         #   a fail during processing (i.e. bug in extension) means postprocess doesn't get called
         #   so original never restored - need a better way to catch this
+        #   maybe restore original in the patched function?
         if self.get_sigmas_backup != K.KDiffusionSampler.get_sigmas:
             self.get_sigmas_backup = K.KDiffusionSampler.get_sigmas
         K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
