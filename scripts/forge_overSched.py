@@ -282,6 +282,9 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         
 
     def get_sigmas(self, p, steps):
+
+        K.KDiffusionSampler.get_sigmas = OverSchedForge.get_sigmas_backup
+
         discard_next_to_last_sigma = self.config is not None and self.config.options.get('discard_next_to_last_sigma', False)
         if opts.always_discard_next_to_last_sigma and not discard_next_to_last_sigma:
             discard_next_to_last_sigma = True
@@ -330,6 +333,11 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
 #find where called from, how is 'p' set? must contain information related to sampler function
     def sample(self, p, x, conditioning, unconditional_conditioning, steps=None, image_conditioning=None):
+
+#   restore original function immediately, in case of failure later means the main extension can't remove it
+        K.KDiffusionSampler.sample = OverSchedForge.sample_backup
+
+        
 
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(self.model_wrap.inner_model.forge_objects.unet, x=x)
@@ -478,11 +486,13 @@ class OverSchedForge(scripts.Script):
     scheduler = "None"
     samplerIndex = 0
     step = 0.5
+    sample_backup = None
+    get_sigmas_backup = None
 
     def __init__(self):
         self.enabled = False
-        self.get_sigmas_backup = None
-        self.sample_backup = None
+        OverSchedForge.get_sigmas_backup = K.KDiffusionSampler.get_sigmas
+        OverSchedForge.sample_backup = K.KDiffusionSampler.sample
 
 
     def title(self):
@@ -538,10 +548,6 @@ class OverSchedForge(scripts.Script):
         self.enabled = enabled
 
         if not enabled:
-            if self.get_sigmas_backup is not None:
-                K.KDiffusionSampler.get_sigmas = self.get_sigmas_backup
-            if self.sample_backup is not None:
-                K.KDiffusionSampler.sample = self.sample_backup
             return
 
         OverSchedForge.scheduler = scheduler
@@ -550,17 +556,9 @@ class OverSchedForge(scripts.Script):
         OverSchedForge.step = step
 
 
-        #   only backup get_sigma if it is differnt
-        #   a fail during processing (i.e. bug in extension) means postprocess doesn't get called
-        #   so original never restored - need a better way to catch this
-        #   maybe restore original in the patched function?
-        if self.get_sigmas_backup != K.KDiffusionSampler.get_sigmas:
-            self.get_sigmas_backup = K.KDiffusionSampler.get_sigmas
         K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
 
         if sampler != 0:
-            if self.sample_backup != K.KDiffusionSampler.sample:
-                self.sample_backup = K.KDiffusionSampler.sample
             K.KDiffusionSampler.sample = patchedKDiffusionSampler.sample
 
 
@@ -573,10 +571,4 @@ class OverSchedForge(scripts.Script):
 
         return
 
-    def postprocess(self, params, processed, *args):
-        if self.get_sigmas_backup is not None:
-            K.KDiffusionSampler.get_sigmas = self.get_sigmas_backup
-        if self.sample_backup is not None:
-            K.KDiffusionSampler.sample = self.sample_backup
-        return
 
