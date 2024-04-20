@@ -17,7 +17,7 @@ Some extra schedulers have been added:
 * *4th power, thresholded* is a simple curve: step is normalised to 1.0 -> 0.0, taken to fourth power, maximum taken compared to linear scaled by 4/n,  then scaled to *sigma_max*-> *sigma_min*. Again, from brief testing, seems good. Equivalent to custom function: m + (M-m)*max((1-x)**4, (1-x)/(0.25*n))
 * *LCM to linear* starts with LCM up to change step, then linear to minimum sigma. Actually testing switching to linear one step earlier, to retain higher sigmas and hopefully add detail with the second sampler. Experimental.
 * ~~*linear* is not even a curve. It's *squared* without the squaring. Sometimes has use, often does not.~~
-* *Align Your Steps* is an optimised schedule from (nVidia)[https://research.nvidia.com/labs/toronto-ai/AlignYourSteps/]. The schedule given in the paper is log-linear interpolated to the set number of steps.
+* *Align Your Steps* is an optimised schedule from [nVidia](https://research.nvidia.com/labs/toronto-ai/AlignYourSteps/). The schedule given in the paper is log-linear interpolated to the set number of steps.
 * *custom* allows user-generated schedules using standard Python code. The custom function is evaluated at each step. The following variables are defined:
 	* *m*: minimum sigma (adjustable in **Settings**, usually ~0.03)
 	* *M*: maximum sigma (adjustable in **Settings**, usually ~14.6)
@@ -43,6 +43,8 @@ This method takes another, even simpler, approach. Multiply sigma_max by the den
 	Now just needs improving, maybe multiple switches. Though 1 + 2 switches seems like the most that would ever be reasonable.
 2. ~~import math for custom schedulers, (probably necessary)~~
 3. options to set sigma limits (probably not, easy to do in Settings)
+4. detect sdxl automatically for Align Your Steps selection
+
 
 
 ---
