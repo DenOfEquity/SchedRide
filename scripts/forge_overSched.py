@@ -264,10 +264,10 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
-    def get_sigma_custom_list(n, sigma_min, sigma_max, device='cpu'):
+    def get_sigmas_custom_list(n, sigma_min, sigma_max, device='cpu'):
         #should input list be assumed in range 0.0-1.0, then scaled at end
         #currently assumed to be intended range
-        sigmasList = OverSchedForge.custom
+        sigmasList = eval(OverSchedForge.custom)
         xs = np.linspace(0, 1, len(sigmasList))
         ys = np.log(sigmasList[::-1])
         
