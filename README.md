@@ -7,7 +7,7 @@ Settings used are saved with metadata, and restored from loading through the **P
 *	Select a sampler and a step to switch to it. For example, select DPM++ SDE in the normal sampler selection, then use this to switch to Euler after 60%.
 ---
 ## Advanced / Details ##
-I patch the **get_sigmas** function in **KDiffusionSampler**, then unpatch when processing has finished.
+I patch the **get_sigmas** function in **KDiffusionSampler**, then unpatch ASAP (in my function).
 Some extra schedulers have been added:
 * *polyexponential* is part of k-diffusers, normally unused.
 * *phi* is a slightly tweaked version of the golden scheduler from [Extraltodeus](https://github.com/Extraltodeus/sigmas_tools_and_the_golden_scheduler).
@@ -28,9 +28,12 @@ Some extra schedulers have been added:
 	more may be added later
 * *custom list* log-linear interpolates a user provided list in the form [n0, n1, n2, ...]
 
+### custom examples ###
+* *cosine*: m + 0.5 * (M - m) * (1 - math.cos(pi * (1-x**0.5)))
+
 Support for Euler Dy and Euler SMEA Dy samplers requires that the relevant extension be installed.
 
-### alt scheduling for HiRes ###
+### alternate scheduling for HiRes ###
 There are standard methods for adjusting the scheduler during hires fix:
 	1. **(default)** multiply step count by the denoising strength, then use that number of steps from the end of the normally calculated schedule.
 	2. **(if the option to always use the specified number of steps is enabled)** divide step count by the denoising strength, generate a new schedule of this length, then use the last step count from this new schedule.
@@ -43,9 +46,12 @@ This method takes another, even simpler, approach. Multiply sigma_max by the den
 	Now just needs improving, maybe multiple switches. Though 1 + 2 switches seems like the most that would ever be reasonable.
 2. ~~import math for custom schedulers, (probably necessary)~~
 3. options to set sigma limits (probably not, easy to do in Settings)
-4. detect sdxl automatically for Align Your Steps selection
+4. support for Restart sampler, which calculates Karras sigmas internally so ignores this override.
 
-
+---
+## Inspiration ##
+[Extraltodeus](https://github.com/Extraltodeus/sigmas_tools_and_the_golden_scheduler)
+[Carzit](https://github.com/Carzit/sd-webui-samplers-scheduler)
 
 ---
 ## License ##
