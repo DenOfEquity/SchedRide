@@ -419,14 +419,12 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         if OverSchedForge.sgm == True:  #   is this really all SGM is?
             sigmas = sigmas[:-1]
 
-        torch.cat([sigmas, sigmas.new_zeros([1])])
-
         if OverSchedForge.setup_img2img_steps_backup != None and p.is_hr_pass == True:
             sd_samplers_common.setup_img2img_steps = OverSchedForge.setup_img2img_steps_backup
             OverSchedForge.setup_img2img_steps_backup = None
 
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
 
 #also need to modify sample_img2img ? seems likely, but get this fully functional first
