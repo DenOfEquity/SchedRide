@@ -82,6 +82,8 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
             i += 1
 
+        newSigmas.append(0.0)
+
         return torch.tensor(newSigmas, device='cuda:0')
 
 
@@ -90,7 +92,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         sigmas = torch.linspace(math.log(sigma_max), math.log(sigma_min), n, device=device).exp()
         siglin = torch.linspace(sigma_max/2.71, sigma_min, n, device=device)
         sigmas = torch.max(sigmas, siglin)
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_fibonacci (n, sigma_min, sigma_max, device='cpu'):
         revsigmas = torch.linspace(sigma_min, sigma_max, n) #   probably a better way
@@ -112,14 +114,14 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
             sigmas[i] = sigma_min + (sigma_max-sigma_min) * ((revsigmas[(n-1)-i] - revsigmas[0]) / revsigmas[n-1])
             i += 1
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_phi(n, sigma_min, sigma_max, device='cpu'):
         sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
         phi = (1 + 5**0.5) / 2
         for x in range(n):
             sigmas[x] = (sigma_max-sigma_min)*((1-x/n)**(phi*phi)) + (sigma_min)*((x/n)**(phi))
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
 
     def get_sigmas_cosexp(n, sigma_min, sigma_max, device='cpu'):
@@ -134,7 +136,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
             sigmas[x] = C + p * (E - C)
             E *= K
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
 
 
@@ -147,7 +149,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         sigmas = torch.max(sigmas, siglin)
         sigmas *= sigma_max - sigma_min
         sigmas += sigma_min
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_4xlinear(n, sigma_min, sigma_max, device='cpu'):
         dropRate1 = 0.75#825
@@ -197,7 +199,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         sigmas *= (sigma_max - sigma_min)
         sigmas += sigma_min
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_geometric(n, sigma_min, sigma_max, device='cpu'):
         #this is same as exponential
@@ -224,7 +226,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         sigmas = torch.tensor(sigmaList, device=device)
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
        
 
 
@@ -279,7 +281,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         sigmas *= (sigma_max - sigma_min)
         sigmas += sigma_min
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_custom_list(n, sigma_min, sigma_max, device='cpu'):
         #should input list be assumed in range 0.0-1.0, then scaled at end
@@ -294,7 +296,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         interpolated_ys = np.exp(new_ys)[::-1].copy()
         sigmas = torch.tensor(interpolated_ys, device=device)
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
 
     def get_sigmas_custom(n, sigma_min, sigma_max, device='cpu'):
@@ -313,7 +315,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
             s += 1
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
 
     def get_sigmas_AYS_sd15(n, sigma_min, sigma_max, device='cpu'):
@@ -329,7 +331,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         sigmas = torch.tensor(interped_ys, device=device)
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
 
     def get_sigmas_AYS_sdXL(n, sigma_min, sigma_max, device='cpu'):
@@ -345,7 +347,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         sigmas = torch.tensor(interped_ys, device=device)
 
-        return sigmas
+        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
 
     def setup_img2img_steps(p, steps=None):
@@ -424,7 +426,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
             OverSchedForge.setup_img2img_steps_backup = None
 
 
-        return torch.cat([sigmas, sigmas.new_zeros([1])])
+        return sigmas
 
 
 #also need to modify sample_img2img ? seems likely, but get this fully functional first
