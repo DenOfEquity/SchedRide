@@ -10,6 +10,10 @@ Sigma minimum and maximum sliders added. Tweaking the minimum up seems to add de
 
 Graph option shows the sigma curve. Curve for "None" can't be drawn as getting those sigmas at this stage is a pain.
 
+...more...
+
+Bump extra action removed, I recommend to use [Detail Daemon](https://github.com/muerrilla/sd-webui-detail-daemon) instead. That extension hits the sigmas in a different place, so is fully compatible and gives much more control.
+
 ---
 ## Install ##
 Go to the **Extensions** tab, then **Install from URL**, use the URL for this repository.
@@ -51,7 +55,7 @@ Some extra schedulers have been added:
 * *cosine*: m + 0.5 * (M - m) * (1 - math.cos(pi * (1-x**0.5)))
 
 ### extra action dropdown ###
-Take the scheduler choice and do something with the results. The blends are based on progression through the steps, so *blend to linear* becomes linear at the end. In this case, linear means a line from sqrt(sigma_max) to sigma_min. *Threshold* takes the maximum of the sigmas and this same linear line. *Bump* inserts a boost between steps 0.2 and 0.6. May be better moved to a third dropdown option; multiselect for now - order of actions matters.
+Take the scheduler choice and do something with the results. The blends are based on progression through the steps, so *blend to linear* becomes linear at the end. In this case, linear means a line from sqrt(sigma_max) to sigma_min. *Threshold* takes the maximum of the sigmas and this same linear line. ~~*Bump* inserts a boost between steps 0.2 and 0.6. May be better moved to a third dropdown option; multiselect for now - order of actions matters.~~
 
 
 Support for Euler Dy and Euler SMEA Dy samplers requires that the relevant extension be installed.
@@ -72,7 +76,7 @@ This method takes another, even simpler, approach. Multiply sigma_max by the den
 4. support for Restart sampler, which calculates Karras sigmas internally so ignores this override.
 5. tidying, jank removal
 6. better Euler Dy support without hardcoding function names
-7. loading actions from image metadata. Saves OK, but doesn't restore.
+7. ~~loading actions from image metadata. Saves OK, but doesn't restore.~~
 
 
 ---
@@ -86,4 +90,3 @@ This method takes another, even simpler, approach. Multiply sigma_max by the den
 Public domain. Unlicense. Free to a good home.
 All terrible code is my own. I've learned from other extensions, StackOverflow, Bing Chat, banging my head against my desk, and cursing IDLE. No warranty. Check the code for yourself.
 
-> Written with [StackEdit](https://stackedit.io/).

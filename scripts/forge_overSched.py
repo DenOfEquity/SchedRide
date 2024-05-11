@@ -362,43 +362,35 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
 #DiscreteSchedule.get_sigmas CompVisDenoiser
 
-    def apply_actions (actions, sigmas):
-        if actions == None:
+    def apply_action (action, sigmas):
+        if action == None:
             return sigmas
         else:
             sigmaList = sigmas.tolist()
             steps = len(sigmaList)-1           #   -1 to ignore the zero
+            sigmaMin = sigmaList[-2]
+            sigmaMax = sigmaList[0]
 
-            for action in actions:
-                sigmaMin = sigmaList[-2]
-                sigmaMax = sigmaList[0]
-
-                if action == "blend to exponential":
-                    K = (sigmaMin / sigmaMax)**(1/(steps-1))
-                    E = sigmaMax
-                    for x in range(steps):
-                        p = x / (steps-1)
-                        sigmaList[x] = sigmaList[x] + p * (E - sigmaList[x])
-                        E *= K
-                elif action == "blend to linear":
-                    E = sigmaMax**0.5
-                    D = (E - sigmaMin) / (steps-1)
-                    for x in range(steps):
-                        p = x / (steps-1)
-                        sigmaList[x] = sigmaList[x] + p * (E - sigmaList[x])
-                        E -= D
-                elif action == "threshold":
-                    E = sigmaMax**0.5
-                    D = (E - sigmaMin) / (steps-1)
-                    for x in range(steps):
-                        sigmaList[x] = max(sigmaList[x], E)
-                        E -= D
-                elif action == "bump":
-                    for x in range(steps):
-                        p = x / (steps-1)
-                        if p > 0.2 and p < 0.6:
-                            px = (0.2 - abs(0.4 - p)) * 2
-                            sigmaList[x] *= px + 1
+            if action == "blend to exponential":
+                K = (sigmaMin / sigmaMax)**(1/(steps-1))
+                E = sigmaMax
+                for x in range(steps):
+                    p = x / (steps-1)
+                    sigmaList[x] = sigmaList[x] + p * (E - sigmaList[x])
+                    E *= K
+            elif action == "blend to linear":
+                E = sigmaMax**0.5
+                D = (E - sigmaMin) / (steps-1)
+                for x in range(steps):
+                    p = x / (steps-1)
+                    sigmaList[x] = sigmaList[x] + p * (E - sigmaList[x])
+                    E -= D
+            elif action == "threshold":
+                E = sigmaMax**0.5
+                D = (E - sigmaMin) / (steps-1)
+                for x in range(steps):
+                    sigmaList[x] = max(sigmaList[x], E)
+                    E -= D
 
             return torch.tensor(sigmaList, device=shared.device)
 
@@ -432,7 +424,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
 
         sigmas = patchedKDiffusionSampler.calculate_sigmas (self, OverSchedForge.scheduler, steps, m_sigma_min, m_sigma_max)
-        sigmas = patchedKDiffusionSampler.apply_actions (OverSchedForge.actions, sigmas)
+        sigmas = patchedKDiffusionSampler.apply_action (OverSchedForge.action, sigmas)
 
         if discard_next_to_last_sigma:
             sigmas = torch.cat([sigmas[:-2], sigmas[-1:]])
@@ -631,8 +623,8 @@ class OverSchedForge(scripts.Script):
                                          "phi", "fibonacci", "continuous VP", "4th power",
                                          "Align Your Steps sd15", "Align Your Steps sdXL", "custom"],
                                         value="None", type='value', label='Scheduler choice', scale=1)
-                actions = gr.Dropdown(["blend to exponential", "blend to linear", "threshold", "bump"],
-                                     value=None, type="value", label="extra action", multiselect=True)
+                action = gr.Dropdown(["blend to exponential", "blend to linear", "threshold"],
+                                     value=None, type="value", label="extra action", multiselect=False)
                                     
             custom = gr.Textbox(value='', label='custom function/list', lines=1.1, visible=False)
             with gr.Row():
@@ -649,10 +641,10 @@ class OverSchedForge(scripts.Script):
             with gr.Accordion (open=False, label="Sigmas graph"):
                 z_vis = gr.Plot(value=None, elem_id='schedride-vis', show_label=False, scale=2) 
 
-            for i in [scheduler, actions]:
+            for i in [scheduler, action]:
                 i.change(
                     fn=self.visualize,
-                    inputs=[scheduler, actions, sigmaMin, sigmaMax, custom],
+                    inputs=[scheduler, action, sigmaMin, sigmaMax, custom],
                     outputs=[z_vis],
                     show_progress=False
                 )
@@ -679,7 +671,7 @@ class OverSchedForge(scripts.Script):
                 (hiresAlt, "os_hiresAlt"),
                 (sgm, "os_sgm"),
                 (scheduler, "os_scheduler"),
-                (actions, "os_actions"),
+                (action, "os_action"),
                 (custom, "os_custom"),
                 (sigmaMin, "os_sigmaMin"),
                 (sigmaMax, "os_sigmaMax"),
@@ -688,9 +680,9 @@ class OverSchedForge(scripts.Script):
             ]
 
 
-        return enabled, hiresAlt, sgm, scheduler, actions, custom, sigmaMin, sigmaMax, sampler, step
+        return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, sampler, step
 
-    def visualize(self, scheduler, actions, sigmaMin, sigmaMax, custom):
+    def visualize(self, scheduler, action, sigmaMin, sigmaMax, custom):
         if scheduler == "None":
            return
         if scheduler == "custom":
@@ -714,8 +706,7 @@ class OverSchedForge(scripts.Script):
 
         fig, ax = plt.subplots(layout="constrained")
         values = patchedKDiffusionSampler.calculate_sigmas (self, scheduler, steps-1, sigmaMin, sigmaMax)
-        values = patchedKDiffusionSampler.apply_actions (actions, values)
-#        values = patchedKDiffusionSampler.apply_action (action2, values)
+        values = patchedKDiffusionSampler.apply_action (action, values)
         ax.plot(range(steps), values.tolist(), color=plot_color)
 
         ##  better to specify a comparison scheduler, but if custom, should also remember those settings
@@ -738,7 +729,7 @@ class OverSchedForge(scripts.Script):
         # This will be called before every sampling.
         # If you use highres fix, this will be called twice.
 
-        enabled, hiresAlt, sgm, scheduler, actions, custom, sigmaMin, sigmaMax, sampler, step = script_args
+        enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, sampler, step = script_args
         self.enabled = enabled
 
         if not enabled:
@@ -746,7 +737,7 @@ class OverSchedForge(scripts.Script):
 
         OverSchedForge.sgm = sgm
         OverSchedForge.scheduler = scheduler
-        OverSchedForge.actions = actions
+        OverSchedForge.action = action
         OverSchedForge.custom = custom
         OverSchedForge.sigmaMin = sigmaMin
         OverSchedForge.sigmaMax = sigmaMax
@@ -770,7 +761,7 @@ class OverSchedForge(scripts.Script):
             os_hiresAlt = hiresAlt,
             os_sgm = sgm,
             os_scheduler = scheduler,
-            os_actions = actions,
+            os_action = action,
             os_sigmaMin = sigmaMin,
             os_sigmaMax = sigmaMax,
             os_sampler = patchedKDiffusionSampler.samplers_list[sampler][0],
