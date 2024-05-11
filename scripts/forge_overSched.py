@@ -623,8 +623,8 @@ class OverSchedForge(scripts.Script):
                                          "phi", "fibonacci", "continuous VP", "4th power",
                                          "Align Your Steps sd15", "Align Your Steps sdXL", "custom"],
                                         value="None", type='value', label='Scheduler choice', scale=1)
-                action = gr.Dropdown(["blend to exponential", "blend to linear", "threshold"],
-                                     value=None, type="value", label="extra action", multiselect=False)
+                action = gr.Dropdown(["None", "blend to exponential", "blend to linear", "threshold"],
+                                     value="None", type="value", label="extra action", multiselect=False)
                                     
             custom = gr.Textbox(value='', label='custom function/list', lines=1.1, visible=False)
             with gr.Row():
