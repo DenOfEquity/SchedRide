@@ -435,7 +435,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 #       apply a scaling per sigma here
 
         if OverSchedForge.setup_img2img_steps_backup != None:
-            sd_samplers_common.setup_img2img_steps = OverSchedForge.setup_img2img_steps_backup
+            modules.sd_samplers_common.setup_img2img_steps = OverSchedForge.setup_img2img_steps_backup
             OverSchedForge.setup_img2img_steps_backup = None
 
 
@@ -666,19 +666,18 @@ class OverSchedForge(scripts.Script):
             defMin.click(defaultSigmaMin, inputs=[], outputs=sigmaMin, show_progress=False)
             defMax.click(defaultSigmaMax, inputs=[], outputs=sigmaMax, show_progress=False)
 
-            self.infotext_fields = [
-                (enabled, lambda d: enabled.update(value=("os_enabled" in d))),
-                (hiresAlt, "os_hiresAlt"),
-                (sgm, "os_sgm"),
-                (scheduler, "os_scheduler"),
-                (action, "os_action"),
-                (custom, "os_custom"),
-                (sigmaMin, "os_sigmaMin"),
-                (sigmaMax, "os_sigmaMax"),
-                (sampler, "os_sampler"),
-                (step, "os_step"),
-            ]
-
+        self.infotext_fields = [
+            (enabled, lambda d: enabled.update(value=("os_enabled" in d))),
+            (hiresAlt, "os_hiresAlt"),
+            (sgm, "os_sgm"),
+            (scheduler, "os_scheduler"),
+            (action, "os_action"),
+            (custom, "os_custom"),
+            (sigmaMin, "os_sigmaMin"),
+            (sigmaMax, "os_sigmaMax"),
+            (sampler, "os_sampler"),
+            (step, "os_step"),
+        ]
 
         return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, sampler, step
 
@@ -746,8 +745,8 @@ class OverSchedForge(scripts.Script):
 
         K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
         if hiresAlt == True and params.is_hr_pass == True:
-            OverSchedForge.setup_img2img_steps_backup = sd_samplers_common.setup_img2img_steps
-            sd_samplers_common.setup_img2img_steps = patchedKDiffusionSampler.setup_img2img_steps
+            OverSchedForge.setup_img2img_steps_backup = modules.sd_samplers_common.setup_img2img_steps
+            modules.sd_samplers_common.setup_img2img_steps = patchedKDiffusionSampler.setup_img2img_steps
 
 
         if sampler != 0:
