@@ -1,25 +1,35 @@
 import gradio as gr
 import inspect
 from modules import scripts
-from modules import sd_samplers_common
 import modules.shared as shared
 from modules.shared import opts
 import modules.sd_samplers_kdiffusion as K
 import k_diffusion.sampling
+import k_diffusion.external
 import modules.sd_samplers
+import modules.sd_samplers_common
 import modules.sd_samplers_extra
 import modules.sd_samplers_lcm
 import modules.sd_samplers_timesteps
 import torch, math
 import numpy as np
 
-##import pickle
 
-import extensions.Euler_Smea_Dyn_Sampler.smea_sampling as EulerDy
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+from modules.ui_components import ToolButton                                                     
+
+
+#import extensions.Euler_Smea_Dyn_Sampler.smea_sampling as EulerDy
 
 from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
 
-class patchedKDiffusionSampler(sd_samplers_common.Sampler):
+class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
+
+    import importlib
+    EulerDy = importlib.import_module("extensions.Euler-Smea-Dyn-Sampler.smea_sampling")
 
     samplers_list = [
         ('None',        None,                                           {}                                                                              ),
@@ -38,14 +48,35 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         ('DPM adaptive',k_diffusion.sampling.sample_dpm_adaptive,       {"uses_ensd": True}                                                             ),
         ('Restart',     modules.sd_samplers_extra.restart_sampler,      {"second_order": True}                                                          ),
         ('LCM',         modules.sd_samplers_lcm.sample_lcm,             {}                                                                              ),
-        ('Euler Dy',        EulerDy.sample_euler_dy,                    {}                                                                              ),
-        ('Euler SMEA Dy',   EulerDy.sample_euler_smea_dy,               {}                                                                              ),
-        #19
+    ]
+
+    #   is there a better way than hardcoding functions?
+    #   seems like should be able to extract from modules.sd_samplers somehow
+    for i in modules.sd_samplers.all_samplers:
+        if i[0] == "Euler Dy":
+            samplers_list.extend([
+               (i[0],  EulerDy.sample_euler_dy,            {}  ),
+            ])
+        elif i[0] == "Euler SMEA Dy":
+            samplers_list.extend([
+                (i[0],  EulerDy.sample_euler_smea_dy,       {}  ),
+            ])
+        elif i[0] == "Euler Negative":
+            samplers_list.extend([
+                (i[0],  EulerDy.sample_euler_negative,      {}  ),
+            ])
+        elif i[0] == "Euler Negative Dy":
+            samplers_list.extend([
+                (i[0],  EulerDy.sample_euler_dy_negative,   {}  ),
+            ])
+            break
+        #also get function name from all_samplers
+        
+        #18 next
 
 #        ('DDIM',        modules.sd_samplers_timesteps.sd_samplers_timesteps_impl.ddim,  {}                                                              ),
 #        ('PLMS',        modules.sd_samplers_timesteps.sd_samplers_timesteps_impl.plms,  {}                                                              ),
 #        ('UniPC',       modules.sd_samplers_timesteps.sd_samplers_timesteps_impl.unipc, {}                                                              ),
-    ]
     
     def __init__(self, funcname, sd_model, options=None):
         super().__init__(funcname)
@@ -58,41 +89,6 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         self.model_wrap_cfg = CFGDenoiserKDiffusion(self)
         self.model_wrap = self.model_wrap_cfg.inner_model
 
-
-
-    def get_sigmas_LCM(n, sigmas, sigma_min, sigma_max, device='cpu'):
-        ##  input sigmas are LCM sigmas calculated to change point, then appended with zero
-
-
-        listSigmas = sigmas.tolist()
-        newSigmas = []
-
-        totalLCMsigmas = len(sigmas) - 2                    #   should be -1, but want higher sigmas. currently generating +1 LCM sigmas, so this is correct
-        remainingSteps = n - totalLCMsigmas
-        lastLCMsigma = listSigmas[totalLCMsigmas-1]
-        delta = (lastLCMsigma - 0.0292) / remainingSteps    #   sigma_min changed by LCM stuff?
-
-        i = 0
-        while i < n:
-            if i < totalLCMsigmas:
-                newSigmas.append(listSigmas[i])
-            else:
-                lastLCMsigma -= delta
-                newSigmas.append(lastLCMsigma)
-
-            i += 1
-
-        newSigmas.append(0.0)
-
-        return torch.tensor(newSigmas, device='cuda:0')
-
-
-    def get_sigmas_exponential_thresholded(n, sigma_min, sigma_max, device='cpu'):
-        """Constructs an exponential noise schedule."""
-        sigmas = torch.linspace(math.log(sigma_max), math.log(sigma_min), n, device=device).exp()
-        siglin = torch.linspace(sigma_max/2.71, sigma_min, n, device=device)
-        sigmas = torch.max(sigmas, siglin)
-        return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_fibonacci (n, sigma_min, sigma_max, device='cpu'):
         revsigmas = torch.linspace(sigma_min, sigma_max, n) #   probably a better way
@@ -120,33 +116,24 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
         phi = (1 + 5**0.5) / 2
         for x in range(n):
-            sigmas[x] = (sigma_max-sigma_min)*((1-x/n)**(phi*phi)) + (sigma_min)*((x/n)**(phi))
+            sigmas[x] = sigma_min + (sigma_max-sigma_min)*((1-x/(n-1))**(phi*phi))
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
 
-    def get_sigmas_cosexp(n, sigma_min, sigma_max, device='cpu'):
+    def get_sigmas_cosine(n, sigma_min, sigma_max, device='cpu'):
         sigmas = torch.linspace(1, 0, n, device=device)
-
-        K = (sigma_min / sigma_max)**(1/(n-1))
-        E = sigma_max
 
         for x in range(n):
             p = x / (n-1)
             C = sigma_min + 0.5*(sigma_max-sigma_min)*(1 - math.cos(math.pi*(1 - p**0.5)))
-            sigmas[x] = C + p * (E - C)
-            E *= K
+            sigmas[x] = C
 
         return torch.cat([sigmas, sigmas.new_zeros([1])])
-
-
 
 
     def get_sigmas_fourth(n, sigma_min, sigma_max, device='cpu'):
         sigmas = torch.linspace(1, 0, n, device=device)
         sigmas = sigmas**4
-        siglin = torch.linspace(1, 0, n, device=device)
-        siglin /= 0.25 * n
-        sigmas = torch.max(sigmas, siglin)
         sigmas *= sigma_max - sigma_min
         sigmas += sigma_min
         return torch.cat([sigmas, sigmas.new_zeros([1])])
@@ -201,35 +188,6 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
-    def get_sigmas_geometric(n, sigma_min, sigma_max, device='cpu'):
-        #this is same as exponential
-        K = (sigma_min / sigma_max)**(1/(n-1))
-
-        res = sigma_max
-        sigmaList = [res]
-        i = 1
-        while (i < n/2):    #best switch point?
-            res *= K
-            sigmaList.append(res)
-            i += 1
-
-        #   switch to linear at mid point - maybe too late?
-        #   similar idea to expo_thresholded - maybe tweak switch point
-        # possibly some value to this, certainly value to idea of preventing exponential drop off after some point
-        #stopping one step early?
-        delta = (res - sigma_min) / (n - i)
-        while (i < n):
-            res -= delta             #last step: i = n-1
-            sigmaList.append(res)
-            i += 1
-            
-
-        sigmas = torch.tensor(sigmaList, device=device)
-
-        return torch.cat([sigmas, sigmas.new_zeros([1])])
-       
-
-
     def get_sigmas_4xnonlinear(n, sigma_min, sigma_max, device='cpu'):
         target1 = 0.32
         target2 = 0.08
@@ -283,37 +241,32 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
-    def get_sigmas_custom_list(n, sigma_min, sigma_max, device='cpu'):
-        #should input list be assumed in range 0.0-1.0, then scaled at end
-        #currently assumed to be intended range
-        sigmasList = eval(OverSchedForge.custom)
-        xs = np.linspace(0, 1, len(sigmasList))
-        ys = np.log(sigmasList[::-1])
-        
-        new_xs = np.linspace(0, 1, n)
-        new_ys = np.interp(new_xs, xs, ys)
-        
-        interpolated_ys = np.exp(new_ys)[::-1].copy()
-        sigmas = torch.tensor(interpolated_ys, device=device)
-
-        return torch.cat([sigmas, sigmas.new_zeros([1])])
-
-
     def get_sigmas_custom(n, sigma_min, sigma_max, device='cpu'):
-        sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
+        if isinstance(eval(OverSchedForge.custom), list):
+            sigmasList = eval(OverSchedForge.custom)
+            xs = np.linspace(0, 1, len(sigmasList))
+            ys = np.log(sigmasList[::-1])
+            
+            new_xs = np.linspace(0, 1, n)
+            new_ys = np.interp(new_xs, xs, ys)
+            
+            interpolated_ys = np.exp(new_ys)[::-1].copy()
+            sigmas = torch.tensor(interpolated_ys, device=device)
+        else:
+            sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
 
-        phi = (1 + 5**0.5) / 2
-        pi = math.pi
+            phi = (1 + 5**0.5) / 2
+            pi = math.pi
 
-        s = 0
-        while (s < n):
-            x = (s) / (n - 1)
-            M = sigma_max
-            m = sigma_min
+            s = 0
+            while (s < n):
+                x = (s) / (n - 1)
+                M = sigma_max
+                m = sigma_min
 
-            sigmas[s] = eval((OverSchedForge.custom))   #sigma_max * (1-x)**((x+1)*phi) + sigma_min * (x)**((x+1)*phi)
+                sigmas[s] = eval((OverSchedForge.custom))
 
-            s += 1
+                s += 1
 
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
@@ -349,6 +302,22 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
+    def scale_sigmas (sigmas, sigma_min, sigma_max, device='cpu'):
+        #scales sigmas to between given min/max - correction for default, ideally only a temp. fix
+        #better to find and patch the used get_sigmas functions - but where is it? kdiffusion.external
+        listSigmas = sigmas.tolist()
+        #assume min/max at end/start
+        currentMin = listSigmas[-1]
+        currentMax = listSigmas[0]
+
+        for i in range(len(listSigmas)):
+            listSigmas[i] -= currentMin
+            listSigmas[i] /= (currentMax - currentMin)
+            listSigmas[i] *= (sigma_max - sigma_min)
+            listSigmas[i] += sigma_min
+
+        return torch.tensor(listSigmas, device=device)
+        
 
     def setup_img2img_steps(p, steps=None):
         requested_steps = (steps or p.steps)
@@ -357,9 +326,99 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         return steps, t_enc
 
+    def calculate_sigmas (self, scheduler, steps, sigmaMin, sigmaMax): #scheduler is a parameter to enable previews (does it matter?)
+        if scheduler == 'karras':
+            if opts.use_old_karras_scheduler_sigmas:
+                sigmaMin, sigmaMax = (0.1, 10)
+            sigmas = k_diffusion.sampling.get_sigmas_karras                     (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+        elif scheduler == 'exponential':
+            sigmas = k_diffusion.sampling.get_sigmas_exponential                (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+
+        elif scheduler == 'cosine':
+            sigmas = patchedKDiffusionSampler.get_sigmas_cosine                 (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+
+        elif scheduler == 'phi':
+            sigmas = patchedKDiffusionSampler.get_sigmas_phi                    (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+        elif scheduler == 'fibonacci':
+            sigmas = patchedKDiffusionSampler.get_sigmas_fibonacci              (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+        elif scheduler == 'continuous VP':
+            sigmas = k_diffusion.sampling.get_sigmas_vp                         (n=steps,                                         device=shared.device)
+        elif scheduler == '4th power':
+            sigmas = patchedKDiffusionSampler.get_sigmas_fourth                 (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+        elif scheduler == 'Align Your Steps sd15':
+            sigmas = patchedKDiffusionSampler.get_sigmas_AYS_sd15               (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+        elif scheduler == 'Align Your Steps sdXL':
+            sigmas = patchedKDiffusionSampler.get_sigmas_AYS_sdXL               (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+               
+        elif scheduler == 'custom' and OverSchedForge.custom != "":
+            sigmas = patchedKDiffusionSampler.get_sigmas_custom                 (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+        else:
+            sigmas = self.model_wrap.get_sigmas(steps)
+            sigmas = patchedKDiffusionSampler.scale_sigmas (sigmas, sigmaMin, sigmaMax)
+            #evenly spaced timesteps from 999 to 0
+            #uses table of log sigmas for all possible timesteps, interpolates
+
+        return sigmas
+
+#DiscreteSchedule.get_sigmas CompVisDenoiser
+
+    def apply_actions (actions, sigmas):
+        if actions == None:
+            return sigmas
+        else:
+            sigmaList = sigmas.tolist()
+            steps = len(sigmaList)-1           #   -1 to ignore the zero
+
+            for action in actions:
+                sigmaMin = sigmaList[-2]
+                sigmaMax = sigmaList[0]
+
+                if action == "blend to exponential":
+                    K = (sigmaMin / sigmaMax)**(1/(steps-1))
+                    E = sigmaMax
+                    for x in range(steps):
+                        p = x / (steps-1)
+                        sigmaList[x] = sigmaList[x] + p * (E - sigmaList[x])
+                        E *= K
+                elif action == "blend to linear":
+                    E = sigmaMax**0.5
+                    D = (E - sigmaMin) / (steps-1)
+                    for x in range(steps):
+                        p = x / (steps-1)
+                        sigmaList[x] = sigmaList[x] + p * (E - sigmaList[x])
+                        E -= D
+                elif action == "threshold":
+                    E = sigmaMax**0.5
+                    D = (E - sigmaMin) / (steps-1)
+                    for x in range(steps):
+                        sigmaList[x] = max(sigmaList[x], E)
+                        E -= D
+                elif action == "bump":
+                    for x in range(steps):
+                        p = x / (steps-1)
+                        if p > 0.2 and p < 0.6:
+                            px = (0.2 - abs(0.4 - p)) * 2
+                            sigmaList[x] *= px + 1
+
+            return torch.tensor(sigmaList, device=shared.device)
+
+
     def get_sigmas(self, p, steps):
 
+        #   restore original function ASAP, in case of problem later
         K.KDiffusionSampler.get_sigmas = OverSchedForge.get_sigmas_backup
+
+#        hr_enabled = getattr(p, "enable_hr", False)
+
+#        m_sigma_min, m_sigma_max = (self.model_wrap.sigmas[0].item(), self.model_wrap.sigmas[-1].item())
+        m_sigma_min = OverSchedForge.sigmaMin
+        m_sigma_max = OverSchedForge.sigmaMax
+
+        if OverSchedForge.setup_img2img_steps_backup != None:
+            #if patched, hiresAlt is enabled and this is the hires pass
+            m_sigma_max *= p.denoising_strength
+            steps = p.hr_second_pass_steps              
+
 
         discard_next_to_last_sigma = self.config is not None and self.config.options.get('discard_next_to_last_sigma', False)
         if opts.always_discard_next_to_last_sigma and not discard_next_to_last_sigma:
@@ -371,49 +430,9 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         if OverSchedForge.sgm == True:  #   is this really all SGM is?
             steps += 1
 
-        m_sigma_min, m_sigma_max = (self.model_wrap.sigmas[0].item(), self.model_wrap.sigmas[-1].item())
 
-        if OverSchedForge.setup_img2img_steps_backup != None and p.is_hr_pass == True:
-            m_sigma_max *= p.denoising_strength
-            #   doesn't work for "None", model_wrap.get_sigmas does its own thing - therefore fails for LCM too?
-
-        if self.config is not None and OverSchedForge.scheduler == 'karras':
-            if opts.use_old_karras_scheduler_sigmas:
-                m_sigma_min, m_sigma_max = (0.1, 10)
-            sigmas = k_diffusion.sampling.get_sigmas_karras(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'exponential':
-            sigmas = k_diffusion.sampling.get_sigmas_exponential(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'exponential thresholded':
-            sigmas = patchedKDiffusionSampler.get_sigmas_exponential_thresholded(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-
-        elif self.config is not None and OverSchedForge.scheduler == 'cosine-exponential blend':
-            sigmas = patchedKDiffusionSampler.get_sigmas_cosexp(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-
-
-        elif self.config is not None and OverSchedForge.scheduler == 'polyexponential':
-            sigmas = k_diffusion.sampling.get_sigmas_polyexponential(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'phi':
-            sigmas = patchedKDiffusionSampler.get_sigmas_phi(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'fibonacci':
-            sigmas = patchedKDiffusionSampler.get_sigmas_fibonacci(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'continuous VP':
-            sigmas = k_diffusion.sampling.get_sigmas_vp(n=steps, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == '4th power thresholded':
-            sigmas = patchedKDiffusionSampler.get_sigmas_fourth(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'Align Your Steps sd15':
-            sigmas = patchedKDiffusionSampler.get_sigmas_AYS_sd15(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'Align Your Steps sdXL':
-            sigmas = patchedKDiffusionSampler.get_sigmas_AYS_sdXL(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-               
-        elif self.config is not None and OverSchedForge.scheduler == 'LCM to linear':
-            sigmas = self.model_wrap.get_sigmas(1 + int(OverSchedForge.step * steps))
-            sigmas = patchedKDiffusionSampler.get_sigmas_LCM(n=steps, sigmas=sigmas, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'custom':
-            sigmas = patchedKDiffusionSampler.get_sigmas_custom(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        elif self.config is not None and OverSchedForge.scheduler == 'custom list':
-            sigmas = patchedKDiffusionSampler.get_sigmas_custom_list(n=steps, sigma_min=m_sigma_min, sigma_max=m_sigma_max, device=shared.device)
-        else:   #   this doesn't use my hires fix
-            sigmas = self.model_wrap.get_sigmas(steps)
+        sigmas = patchedKDiffusionSampler.calculate_sigmas (self, OverSchedForge.scheduler, steps, m_sigma_min, m_sigma_max)
+        sigmas = patchedKDiffusionSampler.apply_actions (OverSchedForge.actions, sigmas)
 
         if discard_next_to_last_sigma:
             sigmas = torch.cat([sigmas[:-2], sigmas[-1:]])
@@ -421,7 +440,9 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         if OverSchedForge.sgm == True:  #   is this really all SGM is?
             sigmas = sigmas[:-1]
 
-        if OverSchedForge.setup_img2img_steps_backup != None and p.is_hr_pass == True:
+#       apply a scaling per sigma here
+
+        if OverSchedForge.setup_img2img_steps_backup != None:
             sd_samplers_common.setup_img2img_steps = OverSchedForge.setup_img2img_steps_backup
             OverSchedForge.setup_img2img_steps_backup = None
 
@@ -431,17 +452,14 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
 #also need to modify sample_img2img ? seems likely, but get this fully functional first
 #changing sampler mid way in img2img seems less likely to be useful, but might need to patch it anyway to tweak scheduler method
-#how to detect hires pass?
 
 
-#find where called from, how is 'p' set? must contain information related to sampler function
     def sample(self, p, x, conditioning, unconditional_conditioning, steps=None, image_conditioning=None):
 
-#   restore original function immediately, in case of failure later means the main extension can't remove it
+        #   restore original function immediately, in case of failure later means the main extension can't remove it
         K.KDiffusionSampler.sample = OverSchedForge.sample_backup
 
-        
-
+    
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(self.model_wrap.inner_model.forge_objects.unet, x=x)
 
@@ -452,7 +470,6 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         sigmas = self.get_sigmas(p, steps).to(x.device)
 
-
         if opts.sgm_noise_multiplier:
             p.extra_generation_params["SGM noise multiplier"] = True
             x = x * torch.sqrt(1.0 + sigmas[0] ** 2.0)
@@ -462,8 +479,8 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         extra_params_kwargs = self.initialize(p)
         
-
 #p is modules.processing.StableDiffusionProcessingTxt2Img object
+
         self.last_latent = x
         self.sampler_extra_args = {
             'cond': conditioning,
@@ -477,13 +494,13 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
 
         stepToChange = int(OverSchedForge.step * len(sigmas))
 
-        s1 = torch.tensor(listSigmas[0:stepToChange+1], device='cuda:0')             #   need sigma+1, and makes progress bar count right
+        s1 = torch.tensor(listSigmas[0:stepToChange+1], device='cuda:0')
         s2 = torch.tensor(listSigmas[stepToChange:len(sigmas)], device='cuda:0')
 
         parameters = inspect.signature(self.func).parameters
 
         if 'n' in parameters: 
-            extra_params_kwargs['n'] = steps    #   ???, actual number I want with this sampler, or total number?
+            extra_params_kwargs['n'] = steps
 
         if 'sigma_min' in parameters:
             extra_params_kwargs['sigma_min'] = self.model_wrap.sigmas[-1].item()
@@ -540,7 +557,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
             extra_params_kwargs.pop('s_noise', None)
             extra_params_kwargs.pop('noise_sampler', None)
 
-        if extraParams.get('solver_type', None) == 'heun':                  #    what's this 2nd param to get() ??
+        if extraParams.get('solver_type', None) == 'heun':
             extra_params_kwargs['solver_type'] = 'heun'
 
 #maybe should control this by sampler, but seems like they have default values anyway
@@ -551,7 +568,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
             extra_params_kwargs['s_churn'] = shared.opts.s_churn
             extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
             extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
-        elif samplerIndex == 17 or samplerIndex == 18:     #euler dy *2
+        elif samplerIndex == 16 or samplerIndex == 17:     #euler dy *2
             extra_params_kwargs['s_churn'] = shared.opts.s_churn
             extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
             extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
@@ -566,6 +583,7 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
                                                                 disable=False, callback=self.callback_state, **extra_params_kwargs))
 
 ##        #save
+##import pickle
 ##        with open("c:\\temp\\latent.pkl", "wb") as file:
 ##            pickle.dump(samples, file, pickle.HIGHEST_PROTOCOL)
 
@@ -573,15 +591,6 @@ class patchedKDiffusionSampler(sd_samplers_common.Sampler):
         sampling_cleanup(unet_patcher)
 
         return samples
-
-
-
-
-
-
-
-
-
 
 
 class OverSchedForge(scripts.Script):
@@ -593,6 +602,8 @@ class OverSchedForge(scripts.Script):
     get_sigmas_backup = None
     setup_img2img_steps_backup = None
     sgm = False
+##    last_scheduler = None
+
 
     def __init__(self):
         self.enabled = False
@@ -616,47 +627,118 @@ class OverSchedForge(scripts.Script):
                 hiresAlt = gr.Checkbox(value=False, label='Use alternate method for HiRes')
                 sgm = gr.Checkbox(value=False, label='SGM')
             with gr.Row(equalHeight=True):
-                scheduler = gr.Dropdown(["None", "karras", "exponential", "exponential thresholded", "polyexponential",
-                                         "cosine-exponential blend", "phi", "fibonacci", "continuous VP", "4th power thresholded",
-                                         "Align Your Steps sd15", "Align Your Steps sdXL", "LCM to linear", "custom", "custom list"], value="phi", type='value', label='Scheduler choice', scale=1)
-                custom = gr.Textbox(value='', max_lines=1, label='custom function/list', scale=2)
+                scheduler = gr.Dropdown(["None", "karras", "exponential", "cosine",
+                                         "phi", "fibonacci", "continuous VP", "4th power",
+                                         "Align Your Steps sd15", "Align Your Steps sdXL", "custom"],
+                                        value="None", type='value', label='Scheduler choice', scale=1)
+                actions = gr.Dropdown(["blend to exponential", "blend to linear", "threshold", "bump"],
+                                     value=None, type="value", label="extra action", multiselect=True)
+                                    
+            custom = gr.Textbox(value='', label='custom function/list', lines=1.1, visible=False)
+            with gr.Row():
+                defMin = ToolButton (value='\U000027F3')
+                sigmaMin = gr.Slider (label="sigma minimum", value=0.029168,
+                                      minimum=0.001, maximum=2.0, step=0.001);
+                sigmaMax = gr.Slider (label="sigma maximum", value=14.614642,
+                                      minimum=2.0, maximum=30.0, step=0.001);
+                defMax = ToolButton (value='\U000027F3')
             with gr.Row(equalHeight=True):
                 sampler = gr.Dropdown(samplerList, value="None", type='index', label='Sampler choice', scale=1)
                 step = gr.Slider(minimum=0.01, maximum=0.99, value=0.5, label='Step to change sampler')
 
-##            def show_custom(scheduler):
-##                if scheduler == "custom" or scheduler == "custom list":
-##                    return gr.update(visible=True)
-##                else:
-##                    return gr.update(visible=False)
-##
-##            scheduler.change(
-##                fn=show_custom,
-##                inputs=scheduler,
-##                outputs=custom
-##            )
+            with gr.Accordion (open=False, label="Sigmas graph"):
+                z_vis = gr.Plot(value=None, elem_id='schedride-vis', show_label=False, scale=2) 
+
+            for i in [scheduler, actions]:
+                i.change(
+                    fn=self.visualize,
+                    inputs=[scheduler, actions, sigmaMin, sigmaMax, custom],
+                    outputs=[z_vis],
+                    show_progress=False
+                )
+
+            def toggleCustom (scheduler):
+                if scheduler == "custom":
+                    return gr.update(visible=True)
+                else:
+                    return gr.update(visible=False)
+
+            scheduler.change(fn=toggleCustom, inputs=[scheduler], outputs=[custom], show_progress=False)
 
 
-        self.infotext_fields = [
-            (enabled, lambda d: enabled.update(value=("os_enabled" in d))),
-            (hiresAlt, "os_hiresAlt"),
-            (sgm, "os_sgm"),
-            (scheduler, "os_scheduler"),
-            (custom, "os_custom"),
-            (sampler, "os_sampler"),
-            (step, "os_step"),
-        ]
+            def defaultSigmaMin ():
+                return 0.029168
+            def defaultSigmaMax ():
+                return 14.614642
+
+            defMin.click(defaultSigmaMin, inputs=[], outputs=sigmaMin, show_progress=False)
+            defMax.click(defaultSigmaMax, inputs=[], outputs=sigmaMax, show_progress=False)
+
+            self.infotext_fields = [
+                (enabled, lambda d: enabled.update(value=("os_enabled" in d))),
+                (hiresAlt, "os_hiresAlt"),
+                (sgm, "os_sgm"),
+                (scheduler, "os_scheduler"),
+                (actions, "os_actions"),
+                (custom, "os_custom"),
+                (sigmaMin, "os_sigmaMin"),
+                (sigmaMax, "os_sigmaMax"),
+                (sampler, "os_sampler"),
+                (step, "os_step"),
+            ]
 
 
-        return enabled, hiresAlt, sgm, scheduler, custom, sampler, step
+        return enabled, hiresAlt, sgm, scheduler, actions, custom, sigmaMin, sigmaMax, sampler, step
 
+    def visualize(self, scheduler, actions, sigmaMin, sigmaMax, custom):
+        if scheduler == "None":
+           return
+        if scheduler == "custom":
+            if custom == "":
+                return
+            OverSchedForge.custom = custom
+
+        steps = 40
+        plot_color = (1, 1, 0.8, 1.0) 
+        plt.rcParams.update({
+            "text.color":  plot_color, 
+            "axes.labelcolor":  plot_color, 
+            "axes.edgecolor":  plot_color, 
+            "figure.facecolor":  (0.0, 0.0, 0.0, 0.0),  
+            "axes.facecolor":    (0.0, 0.0, 0.0, 0.0),  
+            "ytick.labelsize": 6,
+            "ytick.labelcolor": plot_color,
+            "ytick.color": plot_color,
+            "figure.figsize": [5, 2.5]
+        })
+
+        fig, ax = plt.subplots(layout="constrained")
+        values = patchedKDiffusionSampler.calculate_sigmas (self, scheduler, steps-1, sigmaMin, sigmaMax)
+        values = patchedKDiffusionSampler.apply_actions (actions, values)
+#        values = patchedKDiffusionSampler.apply_action (action2, values)
+        ax.plot(range(steps), values.tolist(), color=plot_color)
+
+        ##  better to specify a comparison scheduler, but if custom, should also remember those settings
+##        if scheduler != OverSchedForge.last_scheduler and OverSchedForge.last_scheduler != None:
+##            values2 = patchedKDiffusionSampler.calculate_sigmas (OverSchedForge.last_scheduler, steps-1, sigmaMin, sigmaMax).tolist()
+##            plot_color2 = (0.8, 0.4, 0.4, 1.0) 
+##            ax.plot(range(steps), values2, color=plot_color2)
+##            OverSchedForge.last_scheduler = scheduler
+
+        ax.tick_params(right=False, color=plot_color)
+        ax.set_xticks([i * (steps - 1) / 10 for i in range(10)][1:])
+        ax.set_xticklabels([])
+        ax.set_ylim([0,sigmaMax])
+        ax.set_xlim([0,steps-1])
+        plt.close()
+        return fig   
 
 
     def process_before_every_sampling(self, params, *script_args, **kwargs):
         # This will be called before every sampling.
         # If you use highres fix, this will be called twice.
 
-        enabled, hiresAlt, sgm, scheduler, custom, sampler, step = script_args
+        enabled, hiresAlt, sgm, scheduler, actions, custom, sigmaMin, sigmaMax, sampler, step = script_args
         self.enabled = enabled
 
         if not enabled:
@@ -664,10 +746,12 @@ class OverSchedForge(scripts.Script):
 
         OverSchedForge.sgm = sgm
         OverSchedForge.scheduler = scheduler
+        OverSchedForge.actions = actions
         OverSchedForge.custom = custom
+        OverSchedForge.sigmaMin = sigmaMin
+        OverSchedForge.sigmaMax = sigmaMax
         OverSchedForge.samplerIndex = sampler
         OverSchedForge.step = step
-
 
         K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
         if hiresAlt == True and params.is_hr_pass == True:
@@ -678,8 +762,6 @@ class OverSchedForge(scripts.Script):
         if sampler != 0:
             K.KDiffusionSampler.sample = patchedKDiffusionSampler.sample
 
-        
-
 
         # Below codes will add some logs to the texts below the image outputs on UI.
         # The extra_generation_params does not influence results.
@@ -688,9 +770,12 @@ class OverSchedForge(scripts.Script):
             os_hiresAlt = hiresAlt,
             os_sgm = sgm,
             os_scheduler = scheduler,
+            os_actions = actions,
+            os_sigmaMin = sigmaMin,
+            os_sigmaMax = sigmaMax,
             os_sampler = patchedKDiffusionSampler.samplers_list[sampler][0],
             ))
-        if scheduler == "custom" or scheduler == "custom list":
+        if scheduler == "custom":
             params.extra_generation_params.update(dict(os_custom = custom, ))
         if sampler != 0:
             params.extra_generation_params.update(dict(os_step = step, ))
