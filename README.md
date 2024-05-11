@@ -82,8 +82,10 @@ This method takes another, even simpler, approach. Multiply sigma_max by the den
 ---
 ## Inspiration ##
 [Extraltodeus](https://github.com/Extraltodeus/sigmas_tools_and_the_golden_scheduler)
+
 [Carzit](https://github.com/Carzit/sd-webui-samplers-scheduler)
-[Muerilla](https://github.com/muerrilla/sd-webui-detail-daemon) for graph plot and bump.
+
+[Muerilla](https://github.com/muerrilla/sd-webui-detail-daemon) for how to graph plot
 
 ---
 ## License ##
