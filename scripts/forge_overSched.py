@@ -242,7 +242,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_custom(n, sigma_min, sigma_max, device='cpu'):
-        if isinstance(eval(OverSchedForge.custom), list):
+        if OverSchedForge.custom[0] == '[' and OverSchedForge.custom[-1] == ']':
             sigmasList = eval(OverSchedForge.custom)
             xs = np.linspace(0, 1, len(sigmasList))
             ys = np.log(sigmasList[::-1])
@@ -624,7 +624,7 @@ class OverSchedForge(scripts.Script):
                                          "Align Your Steps sd15", "Align Your Steps sdXL", "custom"],
                                         value="None", type='value', label='Scheduler choice', scale=1)
                 action = gr.Dropdown(["None", "blend to exponential", "blend to linear", "threshold"],
-                                     value="None", type="value", label="extra action", multiselect=False)
+                                     value="None", type="value", label="extra action")
                                     
             custom = gr.Textbox(value='', label='custom function/list', lines=1.1, visible=False)
             with gr.Row():
@@ -641,7 +641,7 @@ class OverSchedForge(scripts.Script):
             with gr.Accordion (open=False, label="Sigmas graph"):
                 z_vis = gr.Plot(value=None, elem_id='schedride-vis', show_label=False, scale=2) 
 
-            for i in [scheduler, action]:
+            for i in [scheduler, action, custom, sigmaMin, sigmaMax]:
                 i.change(
                     fn=self.visualize,
                     inputs=[scheduler, action, sigmaMin, sigmaMax, custom],
@@ -678,6 +678,10 @@ class OverSchedForge(scripts.Script):
             (sampler, "os_sampler"),
             (step, "os_step"),
         ]
+        self.paste_field_names = []
+        for _, field_name in self.infotext_fields:
+            self.paste_field_names.append(field_name)
+
 
         return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, sampler, step
 
@@ -687,7 +691,12 @@ class OverSchedForge(scripts.Script):
         if scheduler == "custom":
             if custom == "":
                 return
-            OverSchedForge.custom = custom
+            try:
+                m, M, x, pi, phi, n, s = 1, 1, 1, 1, 1, 1, 1
+                dummy = eval(custom.strip())
+                OverSchedForge.custom = custom.strip()
+            except:
+                return
 
         steps = 40
         plot_color = (1, 1, 0.8, 1.0) 
@@ -737,7 +746,7 @@ class OverSchedForge(scripts.Script):
         OverSchedForge.sgm = sgm
         OverSchedForge.scheduler = scheduler
         OverSchedForge.action = action
-        OverSchedForge.custom = custom
+        OverSchedForge.custom = custom.strip()
         OverSchedForge.sigmaMin = sigmaMin
         OverSchedForge.sigmaMax = sigmaMax
         OverSchedForge.samplerIndex = sampler
@@ -748,23 +757,19 @@ class OverSchedForge(scripts.Script):
             OverSchedForge.setup_img2img_steps_backup = modules.sd_samplers_common.setup_img2img_steps
             modules.sd_samplers_common.setup_img2img_steps = patchedKDiffusionSampler.setup_img2img_steps
 
-
         if sampler != 0:
             K.KDiffusionSampler.sample = patchedKDiffusionSampler.sample
 
-
-        # Below codes will add some logs to the texts below the image outputs on UI.
-        # The extra_generation_params does not influence results.
-        params.extra_generation_params.update(dict(
-            os_enabled = enabled,
-            os_hiresAlt = hiresAlt,
-            os_sgm = sgm,
-            os_scheduler = scheduler,
-            os_action = action,
-            os_sigmaMin = sigmaMin,
-            os_sigmaMax = sigmaMax,
-            os_sampler = patchedKDiffusionSampler.samplers_list[sampler][0],
-            ))
+        params.extra_generation_params.update({
+            "os_enabled" : enabled,
+            "os_hiresAlt" : hiresAlt,
+            "os_sgm" : sgm,
+            "os_scheduler" : scheduler,
+            "os_action" : action,
+            "os_sigmaMin" : sigmaMin,
+            "os_sigmaMax" : sigmaMax,
+            "os_sampler" : patchedKDiffusionSampler.samplers_list[sampler][0],
+            })
         if scheduler == "custom":
             params.extra_generation_params.update(dict(os_custom = custom, ))
         if sampler != 0:
