@@ -72,7 +72,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             break
         #also get function name from all_samplers
         
-        #18 next
+        #20 next
 
 #        ('DDIM',        modules.sd_samplers_timesteps.sd_samplers_timesteps_impl.ddim,  {}                                                              ),
 #        ('PLMS',        modules.sd_samplers_timesteps.sd_samplers_timesteps_impl.plms,  {}                                                              ),
@@ -560,7 +560,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             extra_params_kwargs['s_churn'] = shared.opts.s_churn
             extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
             extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
-        elif samplerIndex == 16 or samplerIndex == 17:     #euler dy *2
+        elif samplerIndex >= 16 and samplerIndex <= 19:     #euler dy *4
             extra_params_kwargs['s_churn'] = shared.opts.s_churn
             extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
             extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
