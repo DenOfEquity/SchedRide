@@ -678,10 +678,6 @@ class OverSchedForge(scripts.Script):
             (sampler, "os_sampler"),
             (step, "os_step"),
         ]
-        self.paste_field_names = []
-        for _, field_name in self.infotext_fields:
-            self.paste_field_names.append(field_name)
-
 
         return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, sampler, step
 
