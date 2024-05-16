@@ -1,6 +1,11 @@
 ﻿# Scheduler Override #
 ### extension for Forge webui for Stable Diffusion ###
 ---
+### 16/05/2024 ###
+Align Your Steps now auto selects correct version. Hence, name changed in list and one option removed.
+
+Special case added for 1-step; previously some schedulers and the extra actions could error with just one step.
+
 ### 11/05/2024, many updates / reworks ###
 Ineffective options removed, new (perhaps also ineffective) options added.
 

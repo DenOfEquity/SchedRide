@@ -21,9 +21,6 @@ import matplotlib.pyplot as plt
 
 from modules.ui_components import ToolButton                                                     
 
-
-#import extensions.Euler_Smea_Dyn_Sampler.smea_sampling as EulerDy
-
 from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
 
 class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
@@ -333,10 +330,8 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             sigmas = k_diffusion.sampling.get_sigmas_karras                     (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
         elif scheduler == 'exponential':
             sigmas = k_diffusion.sampling.get_sigmas_exponential                (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
-
         elif scheduler == 'cosine':
             sigmas = patchedKDiffusionSampler.get_sigmas_cosine                 (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
-
         elif scheduler == 'phi':
             sigmas = patchedKDiffusionSampler.get_sigmas_phi                    (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
         elif scheduler == 'fibonacci':
@@ -345,11 +340,12 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             sigmas = k_diffusion.sampling.get_sigmas_vp                         (n=steps,                                         device=shared.device)
         elif scheduler == '4th power':
             sigmas = patchedKDiffusionSampler.get_sigmas_fourth                 (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
-        elif scheduler == 'Align Your Steps sd15':
-            sigmas = patchedKDiffusionSampler.get_sigmas_AYS_sd15               (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
-        elif scheduler == 'Align Your Steps sdXL':
-            sigmas = patchedKDiffusionSampler.get_sigmas_AYS_sdXL               (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
-               
+        elif scheduler == 'Align Your Steps':
+            if shared.sd_model.is_sdxl == True:
+                sigmas = patchedKDiffusionSampler.get_sigmas_AYS_sdXL           (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+            else:
+                sigmas = patchedKDiffusionSampler.get_sigmas_AYS_sd15           (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
+#            sigmas = patchedKDiffusionSampler.scale_sigmas (sigmas, sigmaMin, sigmaMax)
         elif scheduler == 'custom' and OverSchedForge.custom != "":
             sigmas = patchedKDiffusionSampler.get_sigmas_custom                 (n=steps, sigma_min=sigmaMin, sigma_max=sigmaMax, device=shared.device)
         else:
@@ -396,13 +392,9 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
 
     def get_sigmas(self, p, steps):
-
         #   restore original function ASAP, in case of problem later
         K.KDiffusionSampler.get_sigmas = OverSchedForge.get_sigmas_backup
 
-#        hr_enabled = getattr(p, "enable_hr", False)
-
-#        m_sigma_min, m_sigma_max = (self.model_wrap.sigmas[0].item(), self.model_wrap.sigmas[-1].item())
         m_sigma_min = OverSchedForge.sigmaMin
         m_sigma_max = OverSchedForge.sigmaMax
 
@@ -411,7 +403,6 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             m_sigma_max *= p.denoising_strength
             steps = p.hr_second_pass_steps              
 
-
         discard_next_to_last_sigma = self.config is not None and self.config.options.get('discard_next_to_last_sigma', False)
         if opts.always_discard_next_to_last_sigma and not discard_next_to_last_sigma:
             discard_next_to_last_sigma = True
@@ -419,39 +410,31 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
         steps += 1 if discard_next_to_last_sigma else 0
 
-        if OverSchedForge.sgm == True:  #   is this really all SGM is?
+        if OverSchedForge.sgm == True:
             steps += 1
 
-
-        sigmas = patchedKDiffusionSampler.calculate_sigmas (self, OverSchedForge.scheduler, steps, m_sigma_min, m_sigma_max)
-        sigmas = patchedKDiffusionSampler.apply_action (OverSchedForge.action, sigmas)
+        if steps == 1:
+            sigmas = torch.tensor([m_sigma_max**0.5, 0.0], device=shared.device)
+        else:
+            sigmas = patchedKDiffusionSampler.calculate_sigmas (self, OverSchedForge.scheduler, steps, m_sigma_min, m_sigma_max)
+            sigmas = patchedKDiffusionSampler.apply_action (OverSchedForge.action, sigmas)
 
         if discard_next_to_last_sigma:
             sigmas = torch.cat([sigmas[:-2], sigmas[-1:]])
 
-        if OverSchedForge.sgm == True:  #   is this really all SGM is?
+        if OverSchedForge.sgm == True:
             sigmas = sigmas[:-1]
-
-#       apply a scaling per sigma here
 
         if OverSchedForge.setup_img2img_steps_backup != None:
             modules.sd_samplers_common.setup_img2img_steps = OverSchedForge.setup_img2img_steps_backup
             OverSchedForge.setup_img2img_steps_backup = None
 
-
         return sigmas
 
-
-#also need to modify sample_img2img ? seems likely, but get this fully functional first
-#changing sampler mid way in img2img seems less likely to be useful, but might need to patch it anyway to tweak scheduler method
-
-
     def sample(self, p, x, conditioning, unconditional_conditioning, steps=None, image_conditioning=None):
-
         #   restore original function immediately, in case of failure later means the main extension can't remove it
         K.KDiffusionSampler.sample = OverSchedForge.sample_backup
 
-    
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(self.model_wrap.inner_model.forge_objects.unet, x=x)
 
@@ -470,7 +453,6 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
 
         extra_params_kwargs = self.initialize(p)
-        
 #p is modules.processing.StableDiffusionProcessingTxt2Img object
 
         self.last_latent = x
@@ -531,7 +513,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             extra_params_kwargs['n'] = steps
 
         if 'sigma_min' in parameters:
-            extra_params_kwargs['sigma_min'] = self.model_wrap.sigmas[-1].item()
+            extra_params_kwargs['sigma_min'] = self.model_wrap.sigmas[-1].item()    #check these - need to use values from extension instead?
             extra_params_kwargs['sigma_max'] = self.model_wrap.sigmas[0].item()
 
         if 'sigmas' in parameters:
@@ -621,7 +603,7 @@ class OverSchedForge(scripts.Script):
             with gr.Row(equalHeight=True):
                 scheduler = gr.Dropdown(["None", "karras", "exponential", "cosine",
                                          "phi", "fibonacci", "continuous VP", "4th power",
-                                         "Align Your Steps sd15", "Align Your Steps sdXL", "custom"],
+                                         "Align Your Steps", "custom"],
                                         value="None", type='value', label='Scheduler choice', scale=1)
                 action = gr.Dropdown(["None", "blend to exponential", "blend to linear", "threshold"],
                                      value="None", type="value", label="extra action")
@@ -694,7 +676,7 @@ class OverSchedForge(scripts.Script):
             except:
                 return
 
-        steps = 40
+        steps = 35          # shared.state.sampling_steps not updated until Generate
         plot_color = (1, 1, 0.8, 1.0) 
         plt.rcParams.update({
             "text.color":  plot_color, 
@@ -709,9 +691,13 @@ class OverSchedForge(scripts.Script):
         })
 
         fig, ax = plt.subplots(layout="constrained")
-        values = patchedKDiffusionSampler.calculate_sigmas (self, scheduler, steps-1, sigmaMin, sigmaMax)
-        values = patchedKDiffusionSampler.apply_action (action, values)
-        ax.plot(range(steps), values.tolist(), color=plot_color)
+        if steps == 1:
+            values = [sigmaMax**0.5, 0.0]
+        else:
+            values = patchedKDiffusionSampler.calculate_sigmas (self, scheduler, steps-1, sigmaMin, sigmaMax)
+            values = patchedKDiffusionSampler.apply_action (action, values).tolist()
+
+        ax.plot(range(steps), values, color=plot_color)
 
         ##  better to specify a comparison scheduler, but if custom, should also remember those settings
 ##        if scheduler != OverSchedForge.last_scheduler and OverSchedForge.last_scheduler != None:
