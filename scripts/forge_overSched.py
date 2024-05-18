@@ -51,21 +51,13 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
     #   seems like should be able to extract from modules.sd_samplers somehow
     for i in modules.sd_samplers.all_samplers:
         if i[0] == "Euler Dy":
-            samplers_list.extend([
-               (i[0],  EulerDy.sample_euler_dy,            {}  ),
-            ])
+            samplers_list.extend([ (i[0],  EulerDy.sample_euler_dy,            {} ), ])
         elif i[0] == "Euler SMEA Dy":
-            samplers_list.extend([
-                (i[0],  EulerDy.sample_euler_smea_dy,       {}  ),
-            ])
+            samplers_list.extend([ (i[0],  EulerDy.sample_euler_smea_dy,       {} ), ])
         elif i[0] == "Euler Negative":
-            samplers_list.extend([
-                (i[0],  EulerDy.sample_euler_negative,      {}  ),
-            ])
+            samplers_list.extend([ (i[0],  EulerDy.sample_euler_negative,      {} ), ])
         elif i[0] == "Euler Negative Dy":
-            samplers_list.extend([
-                (i[0],  EulerDy.sample_euler_dy_negative,   {}  ),
-            ])
+            samplers_list.extend([ (i[0],  EulerDy.sample_euler_dy_negative,   {} ), ])
             break
         #also get function name from all_samplers
         
