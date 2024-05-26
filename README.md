@@ -1,6 +1,13 @@
 ﻿# Scheduler Override #
 ### extension for Forge webui for Stable Diffusion ###
 ---
+### 26/05/2024 ###
+changed method of checking for Euler Dy samplers, previous method didn't always find them (possibly due to extension load order?)
+
+fixed error when using hires alt and hires steps not set
+
+added alternate alt hires method, linear scale, typically needs even lower denoise. experimental.
+
 ### 16/05/2024 ###
 Align Your Steps now auto selects correct version. Hence, name changed in list and one option removed.
 
