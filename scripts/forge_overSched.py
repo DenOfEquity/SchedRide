@@ -13,7 +13,7 @@ import modules.sd_samplers_lcm
 import modules.sd_samplers_timesteps
 import torch, math
 import numpy as np
-
+from modules.sd_samplers_common import images_tensor_to_samples, approximation_indexes
 
 import matplotlib
 matplotlib.use('Agg')
@@ -25,7 +25,7 @@ from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
 
 class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
     samplers_list = [
-        ('None',        None,                                           {}                                                                              ),
+        ('No change',   None,                                           {}                                                                              ),
         ('DPM++ 2M',    k_diffusion.sampling.sample_dpmpp_2m,           {}                                                                              ),
         ('Euler a',     k_diffusion.sampling.sample_euler_ancestral,    {"uses_ensd": True}                                                             ),
         ('Euler',       k_diffusion.sampling.sample_euler,              {}                                                                              ),
@@ -453,12 +453,64 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
         sigmas = self.get_sigmas(p, steps).to(x.device)
 
+        #   can modify initial noise here? yep
+        if OverSchedForge.centreNoise:
+            for b in range(len(x)):
+                for c in range(4):
+                    x[b][c] -= x[b][c].mean()
+
+        w = x.size(3)
+        h = x.size(2)
+
+        #   sharpen the initial noise
+        if OverSchedForge.sharpNoise:
+            import torchvision.transforms.functional as TF
+            minDim = 1 + 2 * (min(w, h) // 2)
+            for b in range(len(x)):
+                blurred = TF.gaussian_blur(x[b], minDim)
+                x[b] = (1.04)*x[b] - 0.04*blurred
+
+        #   colour the initial noise
+        if OverSchedForge.noiseStrength != 0.0:
+            nr = (OverSchedForge.initialNoiseR * 2) - 1.0
+            ng = (OverSchedForge.initialNoiseG * 2) - 1.0
+            nb = (OverSchedForge.initialNoiseB * 2) - 1.0
+
+##            latent1x1a = 1.6981 * nr + -0.029861 * ng + -0.057465 * nb
+##            latent1x1b = -0.282707 * nr + 4.91431 * ng + -3.04784 * nb
+##            latent1x1c = -2.55163 * nr + 2.23159 * ng + 0.0448761 * nb
+##            latent1x1d = -0.780834 * nr + 3.02981 * ng + -3.22914 * nb
+
+##            latent1x1a = torch.tensor(latent1x1a, device=shared.device).repeat(h, w)
+##            latent1x1b = torch.tensor(latent1x1b, device=shared.device).repeat(h, w)
+##            latent1x1c = torch.tensor(latent1x1c, device=shared.device).repeat(h, w)
+##            latent1x1d = torch.tensor(latent1x1d, device=shared.device).repeat(h, w)
+##            latent = torch.stack((latent1x1a, latent1x1b, latent1x1c, latent1x1d), dim=0)
+##            del latent1x1a, latent1x1b, latent1x1c, latent1x1d
+##            latent = latent.unsqueeze(0)
+##
+##            torch.lerp (x, latent, OverSchedForge.noiseStrength, out=x)
+##            del latent
+
+            imageR = torch.tensor(np.full((8,8), (nr), dtype=np.float32))
+            imageG = torch.tensor(np.full((8,8), (ng), dtype=np.float32))
+            imageB = torch.tensor(np.full((8,8), (nb), dtype=np.float32))
+            image = torch.stack((imageR, imageG, imageB), dim=0)
+            image = image.unsqueeze(0)
+
+            latent = images_tensor_to_samples(image, approximation_indexes.get(opts.sd_vae_encode_method), p.sd_model)
+            if shared.sd_model.is_sd1 == True:
+                latent *= 3.5   #maybe should be ~3.5? roughly match scale with default noise
+            latent = latent.repeat (1, 1, h, w)
+
+            torch.lerp (x, latent, OverSchedForge.noiseStrength, out=x)
+            del imageR, imageG, imageB, image, latent
+
         if opts.sgm_noise_multiplier:
             p.extra_generation_params["SGM noise multiplier"] = True
             x = x * torch.sqrt(1.0 + sigmas[0] ** 2.0)
         else:
             x = x * sigmas[0]
-
 
         extra_params_kwargs = self.initialize(p)
 #p is modules.processing.StableDiffusionProcessingTxt2Img object
@@ -473,11 +525,14 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
         }
 
         listSigmas = sigmas.tolist()
+        samplerIndex = OverSchedForge.samplerIndex
 
-        stepToChange = int(OverSchedForge.step * len(sigmas))
-
-        s1 = torch.tensor(listSigmas[0:stepToChange+1], device='cuda:0')
-        s2 = torch.tensor(listSigmas[stepToChange:len(sigmas)], device='cuda:0')
+        if samplerIndex == 0:
+            s1 = sigmas
+        else:
+            stepToChange = int(OverSchedForge.step * len(sigmas))
+            s1 = torch.tensor(listSigmas[0:stepToChange+1], device='cuda:0')
+            s2 = torch.tensor(listSigmas[stepToChange:len(sigmas)], device='cuda:0')
 
         parameters = inspect.signature(self.func).parameters
 
@@ -509,60 +564,54 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
         #euler dy slightly different results with switch, and dpm2 (uses sigma[i-1])
 
+        if samplerIndex != 0:
+            self.func = patchedKDiffusionSampler.samplers_list[samplerIndex][1]
+            extraParams = patchedKDiffusionSampler.samplers_list[samplerIndex][2]
 
-        samplerIndex = OverSchedForge.samplerIndex
-        self.func = patchedKDiffusionSampler.samplers_list[samplerIndex][1]
-        extraParams = patchedKDiffusionSampler.samplers_list[samplerIndex][2]
+            parameters = inspect.signature(self.func).parameters
 
+            if 'n' in parameters:
+                extra_params_kwargs['n'] = steps
 
-        parameters = inspect.signature(self.func).parameters
+            if 'sigma_min' in parameters:
+                extra_params_kwargs['sigma_min'] = self.model_wrap.sigmas[-1].item()    #check these - need to use values from extension instead?
+                extra_params_kwargs['sigma_max'] = self.model_wrap.sigmas[0].item()
 
-        if 'n' in parameters:
-            extra_params_kwargs['n'] = steps
+            if 'sigmas' in parameters:
+                extra_params_kwargs['sigmas'] = s2
+            else:
+                extra_params_kwargs.pop('sigmas', None)
 
-        if 'sigma_min' in parameters:
-            extra_params_kwargs['sigma_min'] = self.model_wrap.sigmas[-1].item()    #check these - need to use values from extension instead?
-            extra_params_kwargs['sigma_max'] = self.model_wrap.sigmas[0].item()
+            if extraParams.get('brownian_noise', False):
+                noise_sampler = self.create_noise_sampler(x, sigmas, p)
+                extra_params_kwargs['noise_sampler'] = noise_sampler
+                extra_params_kwargs['s_noise'] = 1.0
+                extra_params_kwargs['eta'] = 1.0
+            else:
+                extra_params_kwargs.pop('eta', None)
+                extra_params_kwargs.pop('s_noise', None)
+                extra_params_kwargs.pop('noise_sampler', None)
 
-        if 'sigmas' in parameters:
-            extra_params_kwargs['sigmas'] = s2
-        else:
-            extra_params_kwargs.pop('sigmas', None)
+            if extraParams.get('solver_type', None) == 'heun':
+                extra_params_kwargs['solver_type'] = 'heun'
 
-        if extraParams.get('brownian_noise', False):
-            noise_sampler = self.create_noise_sampler(x, sigmas, p)
-            extra_params_kwargs['noise_sampler'] = noise_sampler
-            extra_params_kwargs['s_noise'] = 1.0
-            extra_params_kwargs['eta'] = 1.0
-        else:
-            extra_params_kwargs.pop('eta', None)
-            extra_params_kwargs.pop('s_noise', None)
-            extra_params_kwargs.pop('noise_sampler', None)
-
-        if extraParams.get('solver_type', None) == 'heun':
-            extra_params_kwargs['solver_type'] = 'heun'
-
-#maybe should control this by sampler, but seems like they have default values anyway
-#add UI for these values?? overkill
-
-
-        if samplerIndex == 3 or samplerIndex == 5 or samplerIndex == 6 :     #euler, heun, dpm2
-            extra_params_kwargs['s_churn'] = shared.opts.s_churn
-            extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
-            extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
-        elif samplerIndex >= 16 and samplerIndex <= 19:     #euler dy *4
-            extra_params_kwargs['s_churn'] = shared.opts.s_churn
-            extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
-            extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
-            extra_params_kwargs['s_noise'] = shared.opts.s_noise
-        else:
-            extra_params_kwargs.pop('s_churn', None)
-            extra_params_kwargs.pop('s_tmin', None)
-            extra_params_kwargs.pop('s_tmax', None)
+            if samplerIndex == 3 or samplerIndex == 5 or samplerIndex == 6 :     #euler, heun, dpm2
+                extra_params_kwargs['s_churn'] = shared.opts.s_churn
+                extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
+                extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
+            elif samplerIndex >= 16 and samplerIndex <= 19:     #euler dy *4
+                extra_params_kwargs['s_churn'] = shared.opts.s_churn
+                extra_params_kwargs['s_tmin'] = shared.opts.s_tmin
+                extra_params_kwargs['s_tmax'] = shared.opts.s_tmax
+                extra_params_kwargs['s_noise'] = shared.opts.s_noise
+            else:
+                extra_params_kwargs.pop('s_churn', None)
+                extra_params_kwargs.pop('s_tmin', None)
+                extra_params_kwargs.pop('s_tmax', None)
 
 
-        samples = self.launch_sampling(steps, lambda: self.func(self.model_wrap_cfg, samples, extra_args=self.sampler_extra_args,
-                                                                disable=False, callback=self.callback_state, **extra_params_kwargs))
+            samples = self.launch_sampling(steps, lambda: self.func(self.model_wrap_cfg, samples, extra_args=self.sampler_extra_args,
+                                                                    disable=False, callback=self.callback_state, **extra_params_kwargs))
 
 ##        #save
 ##import pickle
@@ -584,8 +633,11 @@ class OverSchedForge(scripts.Script):
     get_sigmas_backup = None
     setup_img2img_steps_backup = None
     sgm = False
+    centreNoise = False
+    sharpNoise = False
 ##    last_scheduler = None
 
+    from colourPresets import presetList
 
     def __init__(self):
         self.enabled = False
@@ -625,13 +677,26 @@ class OverSchedForge(scripts.Script):
                 sigmaMax = gr.Slider (label="sigma maximum", value=14.614642,
                                       minimum=2.0, maximum=30.0, step=0.001);
                 defMax = ToolButton (value='\U000027F3')
-            with gr.Row(equalHeight=True):
-                sampler = gr.Dropdown(samplerList, value="None", type='index', label='Sampler choice', scale=1)
-                step = gr.Slider(minimum=0.01, maximum=0.99, value=0.5, label='Step to change sampler')
 
             with gr.Accordion (open=False, label="Sigmas graph"):
                 z_vis = gr.Plot(value=None, elem_id='schedride-vis', show_label=False, scale=2) 
 
+            with gr.Row(equalHeight=True):
+                sampler = gr.Dropdown(samplerList, value="No change", type='index', label='Sampler choice', scale=1)
+                step = gr.Slider(minimum=0.01, maximum=0.99, value=0.5, label='Step to change sampler')
+
+            with gr.Accordion (open=False, label="Initial noise"):
+                with gr.Row(equalHeight=True):
+                    preset = gr.Dropdown([i[0] for i in self.presetList], value="None", type='index', label='Colour presets')
+                    noiseStrength = gr.Slider(minimum=0, maximum=0.1, value=0.0, step=0.001, label='strength')
+                    centreNoise = ToolButton(value="c", variant='secondary', tooltip='Centre initial noise')
+                    sharpNoise = ToolButton(value="s", variant='secondary', tooltip='Sharpen initial noise')
+
+                with gr.Row():
+                    initialNoiseR = gr.Slider(minimum=0, maximum=1.0, value=0.0, label='red')
+                    initialNoiseG = gr.Slider(minimum=0, maximum=1.0, value=0.0, label='green')
+                    initialNoiseB = gr.Slider(minimum=0, maximum=1.0, value=0.0, label='blue')
+                
             for i in [scheduler, action, custom, sigmaMin, sigmaMax]:
                 i.change(
                     fn=self.visualize,
@@ -646,16 +711,38 @@ class OverSchedForge(scripts.Script):
                 else:
                     return gr.update(visible=False)
 
-            scheduler.change(fn=toggleCustom, inputs=[scheduler], outputs=[custom], show_progress=False)
+            def updateColours (p):
+                return self.presetList[p][1], self.presetList[p][2], self.presetList[p][3], self.presetList[p][4]
 
+            scheduler.change(fn=toggleCustom, inputs=[scheduler], outputs=[custom], show_progress=False)
+            preset.change(fn=updateColours, inputs=[preset], outputs=[initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength], show_progress=False)
 
             def defaultSigmaMin ():
                 return 0.029168
             def defaultSigmaMax ():
                 return 14.614642
-
             defMin.click(defaultSigmaMin, inputs=[], outputs=sigmaMin, show_progress=False)
             defMax.click(defaultSigmaMax, inputs=[], outputs=sigmaMax, show_progress=False)
+
+            def toggleCentre ():
+                if OverSchedForge.centreNoise == False:
+                    OverSchedForge.centreNoise = True
+                    return gr.Button.update(value='C', variant='primary')
+                else:
+                    OverSchedForge.centreNoise = False
+                    return gr.Button.update(value='c', variant='secondary')
+            def toggleSharp ():
+                if OverSchedForge.sharpNoise == False:
+                    OverSchedForge.sharpNoise = True
+                    return gr.Button.update(value='S', variant='primary')
+                else:
+                    OverSchedForge.sharpNoise = False
+                    return gr.Button.update(value='s', variant='secondary')
+
+
+            centreNoise.click(toggleCentre, inputs=[], outputs=centreNoise)
+            sharpNoise.click(toggleSharp, inputs=[], outputs=sharpNoise)
+
 
         self.infotext_fields = [
             (enabled, lambda d: enabled.update(value=("os_enabled" in d))),
@@ -668,9 +755,15 @@ class OverSchedForge(scripts.Script):
             (sigmaMax, "os_sigmaMax"),
             (sampler, "os_sampler"),
             (step, "os_step"),
+            (centreNoise, "os_centreNoise"),
+            (sharpNoise, "os_sharpNoise"),
+            (noiseStrength, "os_noiseStr"),
+            (initialNoiseR, "os_nR"),
+            (initialNoiseG, "os_nG"),
+            (initialNoiseB, "os_nB"),
         ]
 
-        return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, sampler, step
+        return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength, sampler, step
 
     def visualize(self, scheduler, action, sigmaMin, sigmaMax, custom):
         if scheduler == "None":
@@ -728,7 +821,7 @@ class OverSchedForge(scripts.Script):
         # This will be called before every sampling.
         # If you use highres fix, this will be called twice.
 
-        enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, sampler, step = script_args
+        enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength, sampler, step = script_args
         self.enabled = enabled
 
         if not enabled:
@@ -741,6 +834,10 @@ class OverSchedForge(scripts.Script):
         OverSchedForge.custom = custom.strip()
         OverSchedForge.sigmaMin = sigmaMin
         OverSchedForge.sigmaMax = sigmaMax
+        OverSchedForge.initialNoiseR = initialNoiseR
+        OverSchedForge.initialNoiseG = initialNoiseG
+        OverSchedForge.initialNoiseB = initialNoiseB
+        OverSchedForge.noiseStrength = noiseStrength
         OverSchedForge.samplerIndex = sampler
         OverSchedForge.step = step
 
@@ -750,8 +847,8 @@ class OverSchedForge(scripts.Script):
             OverSchedForge.hiresAlt = hiresAlt
             modules.sd_samplers_common.setup_img2img_steps = patchedKDiffusionSampler.setup_img2img_steps
 
-        if sampler != 0:
-            K.KDiffusionSampler.sample = patchedKDiffusionSampler.sample
+        #if sampler != 0:
+        K.KDiffusionSampler.sample = patchedKDiffusionSampler.sample
 
         params.extra_generation_params.update({
             "os_enabled" : enabled,
@@ -762,11 +859,17 @@ class OverSchedForge(scripts.Script):
             "os_sigmaMin" : sigmaMin,
             "os_sigmaMax" : sigmaMax,
             "os_sampler" : patchedKDiffusionSampler.samplers_list[sampler][0],
+            "os_centreNoise" : OverSchedForge.centreNoise,
+            "os_sharpNoise" : OverSchedForge.sharpNoise,
+            "os_noiseStr" : noiseStrength,
             })
         if scheduler == "custom":
             params.extra_generation_params.update(dict(os_custom = custom, ))
         if sampler != 0:
             params.extra_generation_params.update(dict(os_step = step, ))
+        if noiseStrength != 0:
+            params.extra_generation_params.update(dict(os_nR = initialNoiseR, os_nG = initialNoiseG, os_nB = initialNoiseB, ))
+            
 
         return
 

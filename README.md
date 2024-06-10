@@ -1,6 +1,18 @@
 ﻿# Scheduler Override #
 ### extension for Forge webui for Stable Diffusion ###
 ---
+### 09/06/2024 ###
+added ways of manipulating the starting noise, mainly colourising it. There are extensions which do this already ([example](https://github.com/kenning/sd-webui-noise-color-picker)) , but they switch to img2img processing behind the scenes, which is excellent cheating. But in this repo, things are done *properly*: by patching the entire sample function <sup>which I was already doing anyway</sup>. Some samplers reduce/block the effect: DPM++ SDE, UniPC. Effect also dependent on model. Which makes the preset list largely pointless.
+
+As this modifies the initial noise it can have a significant effect on the final result. If doing serious work, you probably want to settle on settings before spending time refining your prompt.
+
+Presets stored in **colourPresets.py** in the extension directory. Currently manual edits only. Need a button to add/delete?
+
+**c** button toggles centre to mean of initial noise.
+
+**s** button toggles sharpening of initial noise.
+
+
 ### 26/05/2024 ###
 changed method of checking for Euler Dy samplers, previous method didn't always find them (possibly due to extension load order?)
 
@@ -98,6 +110,8 @@ This method takes another, even simpler, approach. Multiply sigma_max by the den
 [Carzit](https://github.com/Carzit/sd-webui-samplers-scheduler)
 
 [Muerilla](https://github.com/muerrilla/sd-webui-detail-daemon) for how to graph plot
+
+[keturn](https://discuss.huggingface.co/t/decoding-latents-to-rgb-without-upscaling/23204/2) for latent->RGB approximate conversion matrix.
 
 ---
 ## License ##
