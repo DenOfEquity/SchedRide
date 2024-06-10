@@ -54,17 +54,6 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
     except:
         print ("Scheduler Override: Smea sampling extension not found.")
 
-##  this doesn't work on initial load, but does after restart UI
-##    for i in modules.sd_samplers.all_samplers:
-##        if i[0] == "Euler Dy":
-##            samplers_list.extend([ (i[0],  EulerDy.sample_euler_dy,            {} ), ])
-##        elif i[0] == "Euler SMEA Dy":
-##            samplers_list.extend([ (i[0],  EulerDy.sample_euler_smea_dy,       {} ), ])
-##        elif i[0] == "Euler Negative":
-##            samplers_list.extend([ (i[0],  EulerDy.sample_euler_negative,      {} ), ])
-##        elif i[0] == "Euler Negative Dy":
-##            samplers_list.extend([ (i[0],  EulerDy.sample_euler_dy_negative,   {} ), ])
-##            break
         #also get function name from all_samplers?
         
         #20 next
@@ -195,9 +184,6 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
         sigmaList = []
 
-#low ** (1/(n-1))  -> n steps from 1.0 to low
-#sigmax * k**n = sigmin
-        #log sigmax * kn = log sigmin
         K=(sigmin/sigmax)**(1/n)
         
         i = 0
@@ -451,7 +437,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
         steps = steps or p.steps
 
-        sigmas = self.get_sigmas(p, steps).to(x.device)
+        sigmas = K.KDiffusionSampler.get_sigmas(self, p, steps).to(x.device)
 
         #   can modify initial noise here? yep
         if OverSchedForge.centreNoise:
@@ -462,35 +448,19 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
         w = x.size(3)
         h = x.size(2)
 
-        #   sharpen the initial noise
+        #   sharpen the initial noise, using trial derived values
         if OverSchedForge.sharpNoise:
             import torchvision.transforms.functional as TF
             minDim = 1 + 2 * (min(w, h) // 2)
             for b in range(len(x)):
                 blurred = TF.gaussian_blur(x[b], minDim)
-                x[b] = (1.04)*x[b] - 0.04*blurred
+                x[b] = 1.04*x[b] - 0.04*blurred
 
         #   colour the initial noise
         if OverSchedForge.noiseStrength != 0.0:
             nr = (OverSchedForge.initialNoiseR * 2) - 1.0
             ng = (OverSchedForge.initialNoiseG * 2) - 1.0
             nb = (OverSchedForge.initialNoiseB * 2) - 1.0
-
-##            latent1x1a = 1.6981 * nr + -0.029861 * ng + -0.057465 * nb
-##            latent1x1b = -0.282707 * nr + 4.91431 * ng + -3.04784 * nb
-##            latent1x1c = -2.55163 * nr + 2.23159 * ng + 0.0448761 * nb
-##            latent1x1d = -0.780834 * nr + 3.02981 * ng + -3.22914 * nb
-
-##            latent1x1a = torch.tensor(latent1x1a, device=shared.device).repeat(h, w)
-##            latent1x1b = torch.tensor(latent1x1b, device=shared.device).repeat(h, w)
-##            latent1x1c = torch.tensor(latent1x1c, device=shared.device).repeat(h, w)
-##            latent1x1d = torch.tensor(latent1x1d, device=shared.device).repeat(h, w)
-##            latent = torch.stack((latent1x1a, latent1x1b, latent1x1c, latent1x1d), dim=0)
-##            del latent1x1a, latent1x1b, latent1x1c, latent1x1d
-##            latent = latent.unsqueeze(0)
-##
-##            torch.lerp (x, latent, OverSchedForge.noiseStrength, out=x)
-##            del latent
 
             imageR = torch.tensor(np.full((8,8), (nr), dtype=np.float32))
             imageG = torch.tensor(np.full((8,8), (ng), dtype=np.float32))
@@ -499,8 +469,12 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             image = image.unsqueeze(0)
 
             latent = images_tensor_to_samples(image, approximation_indexes.get(opts.sd_vae_encode_method), p.sd_model)
+
+#            print (latent.min(), latent.max())
+#            print (x.min(), x.max())
+
             if shared.sd_model.is_sd1 == True:
-                latent *= 3.5   #maybe should be ~3.5? roughly match scale with default noise
+                latent *= 3.5
             latent = latent.repeat (1, 1, h, w)
 
             torch.lerp (x, latent, OverSchedForge.noiseStrength, out=x)
@@ -662,7 +636,7 @@ class OverSchedForge(scripts.Script):
                 sgm = gr.Checkbox(value=False, label='SGM')
                 hiresAlt = gr.Dropdown(["default", "scale max sigma", "linear"], value="default", type="value", label='HiRes method')
             with gr.Row(equalHeight=True):
-                scheduler = gr.Dropdown(["None", "karras", "exponential", "cosine",
+                scheduler = gr.Dropdown(["None", "simple", "karras", "exponential", "cosine",
                                          "phi", "fibonacci", "continuous VP", "4th power",
                                          "Align Your Steps", "custom"],
                                         value="None", type='value', label='Scheduler choice', scale=1)
@@ -766,7 +740,7 @@ class OverSchedForge(scripts.Script):
         return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength, sampler, step
 
     def visualize(self, scheduler, action, sigmaMin, sigmaMax, custom):
-        if scheduler == "None":
+        if scheduler == "None" or scheduler == "simple":
            return
         if scheduler == "custom":
             if custom == "":
@@ -841,7 +815,8 @@ class OverSchedForge(scripts.Script):
         OverSchedForge.samplerIndex = sampler
         OverSchedForge.step = step
 
-        K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
+        if scheduler != "None":
+            K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
 
         if hiresAlt != "default" and params.is_hr_pass == True:
             OverSchedForge.hiresAlt = hiresAlt

@@ -1,6 +1,9 @@
 ﻿# Scheduler Override #
 ### extension for Forge webui for Stable Diffusion ###
 ---
+### 10/06/2024 ###
+add "simple" option to scheduler choice, so now "None" actually means no change to whatever is default for selected sampler (avoids patching get_sigmas function).
+
 ### 09/06/2024 ###
 added ways of manipulating the starting noise, mainly colourising it. There are extensions which do this already ([example](https://github.com/kenning/sd-webui-noise-color-picker)) , but they switch to img2img processing behind the scenes, which is excellent cheating. But in this repo, things are done *properly*: by patching the entire sample function <sup>which I was already doing anyway</sup>. Some samplers reduce/block the effect: DPM++ SDE, UniPC. Effect also dependent on model. Which makes the preset list largely pointless.
 
