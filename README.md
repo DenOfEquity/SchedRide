@@ -111,7 +111,7 @@ This method takes another, even simpler, approach. Multiply sigma_max by the den
 
 [Muerilla](https://github.com/muerrilla/sd-webui-detail-daemon) for how to graph plot
 
-[keturn](https://discuss.huggingface.co/t/decoding-latents-to-rgb-without-upscaling/23204/2) for latent->RGB approximate conversion matrix.
+~~[keturn](https://discuss.huggingface.co/t/decoding-latents-to-rgb-without-upscaling/23204/2) for latent->RGB approximate conversion matrix.~~ No longer used, now I encode colour with VAE. Matrix was a good approximation for sd1.5 but not for sdXL.
 
 ---
 ## License ##
