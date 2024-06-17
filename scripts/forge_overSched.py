@@ -1,5 +1,5 @@
 import gradio as gr
-import inspect
+import inspect, os
 from modules import scripts
 import modules.shared as shared
 from modules.shared import opts
@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 from modules.ui_components import ToolButton                                                     
 
 from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
+import colourPresets
+
 
 class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
     samplers_list = [
@@ -432,14 +434,21 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(unet_patcher, x=x)
 
-#        self.model_wrap.log_sigmas = self.model_wrap.log_sigmas.to(x.device)
-#        self.model_wrap.sigmas = self.model_wrap.sigmas.to(x.device)
+        self.model_wrap.log_sigmas = self.model_wrap.log_sigmas.to(x.device)
+        self.model_wrap.sigmas = self.model_wrap.sigmas.to(x.device)
 
         steps = steps or p.steps
 
         sigmas = K.KDiffusionSampler.get_sigmas(self, p, steps).to(x.device)
 
         #   can modify initial noise here? yep
+        # if OverSchedForge.newNoise:
+            # x = torch.rand_like(x)
+##            channels0 = x[:,0,:,:]
+##            print (channels0.size())
+##            x = channels0.unsqueeze(1).repeat(1, 4, 1, 1)
+##            print (x.size())
+          
         if OverSchedForge.centreNoise:
             for b in range(len(x)):
                 for c in range(4):
@@ -456,11 +465,14 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
                 blurred = TF.gaussian_blur(x[b], minDim)
                 x[b] = 1.04*x[b] - 0.04*blurred
 
+#   clamp noise
+#   set all latent channels to same value
+
         #   colour the initial noise
         if OverSchedForge.noiseStrength != 0.0:
-            nr = (OverSchedForge.initialNoiseR * 2) - 1.0
-            ng = (OverSchedForge.initialNoiseG * 2) - 1.0
-            nb = (OverSchedForge.initialNoiseB * 2) - 1.0
+            nr = ((OverSchedForge.initialNoiseR ** 0.5) * 2) - 1.0
+            ng = ((OverSchedForge.initialNoiseG ** 0.5) * 2) - 1.0
+            nb = ((OverSchedForge.initialNoiseB ** 0.5) * 2) - 1.0
 
             imageR = torch.tensor(np.full((8,8), (nr), dtype=np.float32))
             imageG = torch.tensor(np.full((8,8), (ng), dtype=np.float32))
@@ -470,14 +482,15 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
             latent = images_tensor_to_samples(image, approximation_indexes.get(opts.sd_vae_encode_method), p.sd_model)
 
-#            print (latent.min(), latent.max())
-#            print (x.min(), x.max())
-
             if shared.sd_model.is_sd1 == True:
                 latent *= 3.5
-            latent = latent.repeat (1, 1, h, w)
+            latent = latent.repeat (x.size(0), 1, h, w)
 
+            #method 0: mean stays approximately the same
             torch.lerp (x, latent, OverSchedForge.noiseStrength, out=x)
+            #method 1: mean moves toward colour
+            #x += latent * OverSchedForge.noiseStrength
+                
             del imageR, imageG, imageB, image, latent
 
         if opts.sgm_noise_multiplier:
@@ -502,7 +515,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
         samplerIndex = OverSchedForge.samplerIndex
 
         if samplerIndex == 0:
-            s1 = sigmas
+            s1 = sigmas.to('cuda')
         else:
             stepToChange = int(OverSchedForge.step * len(sigmas))
             s1 = torch.tensor(listSigmas[0:stepToChange+1], device='cuda:0')
@@ -607,7 +620,8 @@ class OverSchedForge(scripts.Script):
     get_sigmas_backup = None
     setup_img2img_steps_backup = None
     sgm = False
-    centreNoise = False
+    # newNoise = False
+    centreNoise = True
     sharpNoise = False
 ##    last_scheduler = None
 
@@ -661,15 +675,19 @@ class OverSchedForge(scripts.Script):
 
             with gr.Accordion (open=False, label="Initial noise"):
                 with gr.Row(equalHeight=True):
-                    preset = gr.Dropdown([i[0] for i in self.presetList], value="None", type='index', label='Colour presets')
-                    noiseStrength = gr.Slider(minimum=0, maximum=0.1, value=0.0, step=0.001, label='strength')
-                    centreNoise = ToolButton(value="c", variant='secondary', tooltip='Centre initial noise')
+                    delPreset = ToolButton(value="-", variant='secondary', tooltip='remove preset')
+                    preset = gr.Dropdown([i[0] for i in self.presetList], value="(None)", type='value', label='Colour presets', allow_custom_value=True)
+                    addPreset = ToolButton(value="+", variant='secondary', tooltip='add preset')
+                    savePreset = ToolButton(value="save", variant='secondary', tooltip='save presets')
+                    # newNoise = ToolButton(value="n", variant='secondary', tooltip='New noise')
+                    centreNoise = ToolButton(value="C", variant='primary', tooltip='Centre initial noise')
                     sharpNoise = ToolButton(value="s", variant='secondary', tooltip='Sharpen initial noise')
 
                 with gr.Row():
                     initialNoiseR = gr.Slider(minimum=0, maximum=1.0, value=0.0, label='red')
                     initialNoiseG = gr.Slider(minimum=0, maximum=1.0, value=0.0, label='green')
                     initialNoiseB = gr.Slider(minimum=0, maximum=1.0, value=0.0, label='blue')
+                    noiseStrength = gr.Slider(minimum=0, maximum=0.1, value=0.0, step=0.001, label='strength')
                 
             for i in [scheduler, action, custom, sigmaMin, sigmaMax]:
                 i.change(
@@ -685,11 +703,15 @@ class OverSchedForge(scripts.Script):
                 else:
                     return gr.update(visible=False)
 
-            def updateColours (p):
-                return self.presetList[p][1], self.presetList[p][2], self.presetList[p][3], self.presetList[p][4]
+            def updateColours (preset, nR, nG, nB, nS):
+                for i in range(len(self.presetList)):
+                    p = self.presetList[i]
+                    if p[0] == preset:
+                        return p[1], p[2], p[3], p[4]
+                return nR, nG, nB, nS
 
             scheduler.change(fn=toggleCustom, inputs=[scheduler], outputs=[custom], show_progress=False)
-            preset.change(fn=updateColours, inputs=[preset], outputs=[initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength], show_progress=False)
+            preset.change(fn=updateColours, inputs=[preset, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength], outputs=[initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength], show_progress=False)
 
             def defaultSigmaMin ():
                 return 0.029168
@@ -698,6 +720,13 @@ class OverSchedForge(scripts.Script):
             defMin.click(defaultSigmaMin, inputs=[], outputs=sigmaMin, show_progress=False)
             defMax.click(defaultSigmaMax, inputs=[], outputs=sigmaMax, show_progress=False)
 
+            # def toggleNewNoise ():
+                # if OverSchedForge.newNoise == False:
+                    # OverSchedForge.newNoise = True
+                    # return gr.Button.update(value='N', variant='primary')
+                # else:
+                    # OverSchedForge.newNoise = False
+                    # return gr.Button.update(value='n', variant='secondary')
             def toggleCentre ():
                 if OverSchedForge.centreNoise == False:
                     OverSchedForge.centreNoise = True
@@ -712,11 +741,31 @@ class OverSchedForge(scripts.Script):
                 else:
                     OverSchedForge.sharpNoise = False
                     return gr.Button.update(value='s', variant='secondary')
+            def addColourPreset (name, r, g, b, s):
+                namelist = [i[0] for i in self.presetList]
+                if name not in namelist:
+                    self.presetList.append((name, r, g, b, s))
+                    self.presetList = sorted(self.presetList)
+                return gr.Dropdown.update(choices=[i[0] for i in self.presetList])
+            def delColourPreset (name):
+                for i in range(len(self.presetList)):
+                    if name != "(None)" and self.presetList[i][0] == name:
+                        del (self.presetList[i])
+                        break
+                return gr.Dropdown.update(choices=[i[0] for i in self.presetList])
+            def saveColourPreset ():
+                #sort alphabetically? or button for that
+                file = os.path.abspath(colourPresets.__file__)
+                text = "presetList = [\n\t" + ',\n\t'.join(map(str, self.presetList)) +"\n]"
+                with open(file, 'w') as f:
+                    f.write(text)
 
-
+            # newNoise.click(toggleNewNoise, inputs=[], outputs=newNoise)
             centreNoise.click(toggleCentre, inputs=[], outputs=centreNoise)
             sharpNoise.click(toggleSharp, inputs=[], outputs=sharpNoise)
-
+            addPreset.click(addColourPreset, inputs=[preset, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength], outputs=preset)
+            delPreset.click(delColourPreset, inputs=preset, outputs=preset)
+            savePreset.click(saveColourPreset, inputs=[], outputs=[])
 
         self.infotext_fields = [
             (enabled, lambda d: enabled.update(value=("os_enabled" in d))),

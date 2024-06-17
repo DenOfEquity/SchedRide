@@ -1,15 +1,20 @@
 ﻿# Scheduler Override #
 ### extension for Forge webui for Stable Diffusion ###
 ---
+### 17/06/2024 ###
+add/delete noise colour presets, and save list (overwrites **colourPresets.py** in the extension directory). The list is no longer selection only, names can be typed in. So after you find a colour you like and want to save, edit the name to something suitably cool then hit the '+' button to add to the list. '-' button removes current option, but doesn't clear the settings, so if you delete accidently you can immediately add it back. Additions and deletions are session only unless saved. No direct overwrites, but you can delete then add. List is always alphabetical order, sorted when new entry added.
+
+included basic gamma for the input colours, to better match expected values. Using square root (= gamma 2.0). No need to be more precise IMO. Preset list updated accordingly.
+
 ### 10/06/2024 ###
-add "simple" option to scheduler choice, so now "None" actually means no change to whatever is default for selected sampler (avoids patching get_sigmas function).
+add "simple" option to scheduler choice, so now "None" actually means no change to whatever is default for selected sampler (avoids patching get_sigmas function if not necessary).
 
 ### 09/06/2024 ###
 added ways of manipulating the starting noise, mainly colourising it. There are extensions which do this already ([example](https://github.com/kenning/sd-webui-noise-color-picker)) , but they switch to img2img processing behind the scenes, which is excellent cheating. But in this repo, things are done *properly*: by patching the entire sample function <sup>which I was already doing anyway</sup>. Some samplers reduce/block the effect: DPM++ SDE, UniPC. Effect also dependent on model. Which makes the preset list largely pointless.
 
 As this modifies the initial noise it can have a significant effect on the final result. If doing serious work, you probably want to settle on settings before spending time refining your prompt.
 
-Presets stored in **colourPresets.py** in the extension directory. Currently manual edits only. Need a button to add/delete?
+Presets stored in **colourPresets.py** in the extension directory. ~~Currently manual edits only. Need a button to add/delete?~~
 
 **c** button toggles centre to mean of initial noise.
 
@@ -102,7 +107,7 @@ This method takes another, even simpler, approach. Multiply sigma_max by the den
 3. ~~options to set sigma limits (probably not, easy to do in Settings)~~
 4. support for Restart sampler, which calculates Karras sigmas internally so ignores this override.
 5. tidying, jank removal
-6. better Euler Dy support without hardcoding function names
+6. ~~better Euler Dy support without hardcoding function names~~
 7. ~~loading actions from image metadata. Saves OK, but doesn't restore.~~
 
 
