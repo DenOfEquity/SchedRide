@@ -1,6 +1,9 @@
 ﻿# Scheduler Override #
 ### extension for Forge webui for Stable Diffusion ###
 ---
+### 25/06/2024 ###
+corection for saving extra generation params, now updates *params.txt* too. (*process* > *process_before_every_sampling* for this)
+
 ### 17/06/2024 ###
 add/delete noise colour presets, and save list (overwrites **colourPresets.py** in the extension directory). The list is no longer selection only, names can be typed in. So after you find a colour you like and want to save, edit the name to something suitably cool then hit the '+' button to add to the list. '-' button removes current option, but doesn't clear the settings, so if you delete accidently you can immediately add it back. Additions and deletions are session only unless saved. No direct overwrites, but you can delete then add. List is always alphabetical order, sorted when new entry added.
 

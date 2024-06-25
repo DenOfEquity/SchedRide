@@ -628,11 +628,9 @@ class OverSchedForge(scripts.Script):
     from colourPresets import presetList
 
     def __init__(self):
-        self.enabled = False
         OverSchedForge.get_sigmas_backup = K.KDiffusionSampler.get_sigmas
         OverSchedForge.sample_backup = K.KDiffusionSampler.sample
         OverSchedForge.setup_img2img_steps_backup = modules.sd_samplers_common.setup_img2img_steps
-
 
     def title(self):
         return "Scheduler Override"
@@ -840,12 +838,8 @@ class OverSchedForge(scripts.Script):
         return fig   
 
 
-    def process_before_every_sampling(self, params, *script_args, **kwargs):
-        # This will be called before every sampling.
-        # If you use highres fix, this will be called twice.
-
+    def process(self, params, *script_args, **kwargs):
         enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength, sampler, step = script_args
-        self.enabled = enabled
 
         if not enabled:
             return
@@ -863,16 +857,6 @@ class OverSchedForge(scripts.Script):
         OverSchedForge.noiseStrength = noiseStrength
         OverSchedForge.samplerIndex = sampler
         OverSchedForge.step = step
-
-        if scheduler != "None":
-            K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
-
-        if hiresAlt != "default" and params.is_hr_pass == True:
-            OverSchedForge.hiresAlt = hiresAlt
-            modules.sd_samplers_common.setup_img2img_steps = patchedKDiffusionSampler.setup_img2img_steps
-
-        #if sampler != 0:
-        K.KDiffusionSampler.sample = patchedKDiffusionSampler.sample
 
         params.extra_generation_params.update({
             "os_enabled" : enabled,
@@ -893,7 +877,21 @@ class OverSchedForge(scripts.Script):
             params.extra_generation_params.update(dict(os_step = step, ))
         if noiseStrength != 0:
             params.extra_generation_params.update(dict(os_nR = initialNoiseR, os_nG = initialNoiseG, os_nB = initialNoiseB, ))
-            
+
+        return
+
+
+    def process_before_every_sampling(self, params, *script_args, **kwargs):
+        # This will be called before every sampling.
+        # If you use highres fix, this will be called twice.
+        enabled = script_args[0]
+        if enabled:
+            if self.scheduler != "None":
+                K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
+            if self.hiresAlt != "default" and params.is_hr_pass == True:
+                OverSchedForge.hiresAlt = hiresAlt
+                modules.sd_samplers_common.setup_img2img_steps = patchedKDiffusionSampler.setup_img2img_steps
+            K.KDiffusionSampler.sample = patchedKDiffusionSampler.sample
 
         return
 
