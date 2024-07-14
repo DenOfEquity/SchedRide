@@ -427,6 +427,74 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
         return sigmas
 
+    # via extraltodeus
+    # found at https://gist.github.com/vadimkantorov/ac1b097753f217c5c11bc2ff396e0a57
+    # which was ported from https://github.com/pvigier/perlin-numpy/blob/master/perlin2d.py
+    def rand_perlin_2d(shape, res, fade = lambda t: 6*t**5 - 15*t**4 + 10*t**3):
+        delta = (res[0] / shape[0], res[1] / shape[1])
+        d = (shape[0] // res[0], shape[1] // res[1])
+        
+        grid = torch.stack(torch.meshgrid(torch.arange(0, res[0], delta[0]), torch.arange(0, res[1], delta[1])), dim = -1) % 1
+        angles = 2*math.pi*torch.rand(res[0]+1, res[1]+1)
+        gradients = torch.stack((torch.cos(angles), torch.sin(angles)), dim = -1)
+        
+        tile_grads = lambda slice1, slice2: gradients[slice1[0]:slice1[1], slice2[0]:slice2[1]].repeat_interleave(d[0], 0).repeat_interleave(d[1], 1)
+        dot = lambda grad, shift: (torch.stack((grid[:shape[0],:shape[1],0] + shift[0], grid[:shape[0],:shape[1], 1] + shift[1]  ), dim = -1) * grad[:shape[0], :shape[1]]).sum(dim = -1)
+        
+        n00 = dot(tile_grads([0, -1], [0, -1]), [0,  0])
+        n10 = dot(tile_grads([1, None], [0, -1]), [-1, 0])
+        n01 = dot(tile_grads([0, -1],[1, None]), [0, -1])
+        n11 = dot(tile_grads([1, None], [1, None]), [-1,-1])
+        t = fade(grid[:shape[0], :shape[1]])
+        return math.sqrt(2) * torch.lerp(torch.lerp(n00, n10, t[..., 0]), torch.lerp(n01, n11, t[..., 0]), t[..., 1])
+
+
+    def rand_perlin_2d_octaves(shape, res, octaves=1, persistence=0.5):
+        noise = torch.zeros(shape)
+        frequency = 1
+        amplitude = 1
+        minDim = min(shape[0], shape[1])
+        
+        for _ in range(octaves):
+            noise += amplitude * patchedKDiffusionSampler.rand_perlin_2d(shape, (frequency*res[0], frequency*res[1]))
+            frequency *= 2
+            if shape[0] % frequency != 0:
+                break
+            if shape[1] % frequency != 0:
+                break
+            amplitude *= persistence
+        noise = torch.remainder(torch.abs(noise)*1000000,17)/17
+        return noise
+    
+
+    def create_noisy_latents_perlin(seed, width, height, batch_size, detail_level):
+        noise = torch.zeros((batch_size, 4, height, width), dtype=torch.float32, device="cpu").cpu()
+
+        if "(1 octave)" in OverSchedForge.noise:
+            octaves = 1
+        elif "(2 octaves)" in OverSchedForge.noise:
+            octaves = 2
+        elif "(4 octaves)" in OverSchedForge.noise:
+            octaves = 4
+        elif "(max octaves)" in OverSchedForge.noise:
+            octaves = 99
+        else:
+            octaves = 1
+
+        for i in range(batch_size):
+            torch.manual_seed(seed + i)
+
+            for j in range(4):
+                noise_values = patchedKDiffusionSampler.rand_perlin_2d_octaves((height, width), (1,1), octaves, 0.5)
+                noise_values -= 0.5 * noise_values.max()
+                noise_values *= 2
+                result = (1+detail_level/10)*torch.erfinv(noise_values) * (2 ** 0.5)
+                result = torch.clamp(result,-4,4)
+
+                noise[i, j, :, :] = result
+        return noise
+
+
     def sample(self, p, x, conditioning, unconditional_conditioning, steps=None, image_conditioning=None):
         #   restore original function immediately, in case of failure later means the main extension can't remove it
         K.KDiffusionSampler.sample = OverSchedForge.sample_backup
@@ -441,21 +509,20 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
         sigmas = K.KDiffusionSampler.get_sigmas(self, p, steps).to(x.device)
 
+        w = x.size(3)
+        h = x.size(2)
+
+        detail = 0.0  #   range -1 to 1
+
         #   can modify initial noise here? yep
-        # if OverSchedForge.newNoise:
-            # x = torch.rand_like(x)
-##            channels0 = x[:,0,:,:]
-##            print (channels0.size())
-##            x = channels0.unsqueeze(1).repeat(1, 4, 1, 1)
-##            print (x.size())
+        if "Perlin" in OverSchedForge.noise:
+            x = patchedKDiffusionSampler.create_noisy_latents_perlin (p.seed, w, h, x.size(0), detail).to('cuda')
           
         if OverSchedForge.centreNoise:
             for b in range(len(x)):
                 for c in range(4):
                     x[b][c] -= x[b][c].mean()
 
-        w = x.size(3)
-        h = x.size(2)
 
         #   sharpen the initial noise, using trial derived values
         if OverSchedForge.sharpNoise:
@@ -527,8 +594,8 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             extra_params_kwargs['n'] = steps
 
         if 'sigma_min' in parameters:
-            extra_params_kwargs['sigma_min'] = self.model_wrap.sigmas[-1].item()
-            extra_params_kwargs['sigma_max'] = self.model_wrap.sigmas[0].item()
+            extra_params_kwargs['sigma_min'] = OverSchedForge.sigmaMin  #self.model_wrap.sigmas[-1].item()
+            extra_params_kwargs['sigma_max'] = OverSchedForge.sigmaMax  #self.model_wrap.sigmas[0].item()
 
         if 'sigmas' in parameters:
             extra_params_kwargs['sigmas'] = s1
@@ -561,8 +628,8 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
                 extra_params_kwargs['n'] = steps
 
             if 'sigma_min' in parameters:
-                extra_params_kwargs['sigma_min'] = self.model_wrap.sigmas[-1].item()    #check these - need to use values from extension instead?
-                extra_params_kwargs['sigma_max'] = self.model_wrap.sigmas[0].item()
+                extra_params_kwargs['sigma_min'] = OverSchedForge.sigmaMin  #self.model_wrap.sigmas[-1].item()
+                extra_params_kwargs['sigma_max'] = OverSchedForge.sigmaMax  #self.model_wrap.sigmas[0].item()
 
             if 'sigmas' in parameters:
                 extra_params_kwargs['sigmas'] = s2
@@ -620,7 +687,6 @@ class OverSchedForge(scripts.Script):
     get_sigmas_backup = None
     setup_img2img_steps_backup = None
     sgm = False
-    # newNoise = False
     centreNoise = True
     sharpNoise = False
 ##    last_scheduler = None
@@ -677,7 +743,7 @@ class OverSchedForge(scripts.Script):
                     preset = gr.Dropdown([i[0] for i in self.presetList], value="(None)", type='value', label='Colour presets', allow_custom_value=True)
                     addPreset = ToolButton(value="+", variant='secondary', tooltip='add preset')
                     savePreset = ToolButton(value="save", variant='secondary', tooltip='save presets')
-                    # newNoise = ToolButton(value="n", variant='secondary', tooltip='New noise')
+                    noise = gr.Dropdown(["default", "Perlin (1 octave)", "Perlin (2 octaves)", "Perlin (4 octaves)", "Perlin (max octaves)"], type="value", value="default", label='noise type', scale=0)
                     centreNoise = ToolButton(value="C", variant='primary', tooltip='Centre initial noise')
                     sharpNoise = ToolButton(value="s", variant='secondary', tooltip='Sharpen initial noise')
 
@@ -718,27 +784,15 @@ class OverSchedForge(scripts.Script):
             defMin.click(defaultSigmaMin, inputs=[], outputs=sigmaMin, show_progress=False)
             defMax.click(defaultSigmaMax, inputs=[], outputs=sigmaMax, show_progress=False)
 
-            # def toggleNewNoise ():
-                # if OverSchedForge.newNoise == False:
-                    # OverSchedForge.newNoise = True
-                    # return gr.Button.update(value='N', variant='primary')
-                # else:
-                    # OverSchedForge.newNoise = False
-                    # return gr.Button.update(value='n', variant='secondary')
             def toggleCentre ():
-                if OverSchedForge.centreNoise == False:
-                    OverSchedForge.centreNoise = True
-                    return gr.Button.update(value='C', variant='primary')
-                else:
-                    OverSchedForge.centreNoise = False
-                    return gr.Button.update(value='c', variant='secondary')
+                OverSchedForge.centreNoise ^= True
+                return gr.Button.update(value=['c', 'C'][OverSchedForge.centreNoise],
+                                        variant=['secondary', 'primary'][OverSchedForge.centreNoise])
             def toggleSharp ():
-                if OverSchedForge.sharpNoise == False:
-                    OverSchedForge.sharpNoise = True
-                    return gr.Button.update(value='S', variant='primary')
-                else:
-                    OverSchedForge.sharpNoise = False
-                    return gr.Button.update(value='s', variant='secondary')
+                OverSchedForge.sharpNoise ^= True
+                return gr.Button.update(value=['s', 'S'][OverSchedForge.sharpNoise],
+                                        variant=['secondary', 'primary'][OverSchedForge.sharpNoise])
+
             def addColourPreset (name, r, g, b, s):
                 namelist = [i[0] for i in self.presetList]
                 if name not in namelist:
@@ -758,7 +812,6 @@ class OverSchedForge(scripts.Script):
                 with open(file, 'w') as f:
                     f.write(text)
 
-            # newNoise.click(toggleNewNoise, inputs=[], outputs=newNoise)
             centreNoise.click(toggleCentre, inputs=[], outputs=centreNoise)
             sharpNoise.click(toggleSharp, inputs=[], outputs=sharpNoise)
             addPreset.click(addColourPreset, inputs=[preset, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength], outputs=preset)
@@ -776,15 +829,14 @@ class OverSchedForge(scripts.Script):
             (sigmaMax, "os_sigmaMax"),
             (sampler, "os_sampler"),
             (step, "os_step"),
-            (centreNoise, "os_centreNoise"),
-            (sharpNoise, "os_sharpNoise"),
             (noiseStrength, "os_noiseStr"),
             (initialNoiseR, "os_nR"),
             (initialNoiseG, "os_nG"),
             (initialNoiseB, "os_nB"),
+            (noise, "os_noise"),
         ]
 
-        return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength, sampler, step
+        return enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength, sampler, step, noise
 
     def visualize(self, scheduler, action, sigmaMin, sigmaMax, custom):
         if scheduler == "None" or scheduler == "simple":
@@ -839,7 +891,7 @@ class OverSchedForge(scripts.Script):
 
 
     def process(self, params, *script_args, **kwargs):
-        enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength, sampler, step = script_args
+        enabled, hiresAlt, sgm, scheduler, action, custom, sigmaMin, sigmaMax, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength, sampler, step, noise = script_args
 
         if not enabled:
             return
@@ -857,6 +909,7 @@ class OverSchedForge(scripts.Script):
         OverSchedForge.noiseStrength = noiseStrength
         OverSchedForge.samplerIndex = sampler
         OverSchedForge.step = step
+        OverSchedForge.noise = noise
 
         params.extra_generation_params.update({
             "os_enabled" : enabled,
@@ -867,6 +920,7 @@ class OverSchedForge(scripts.Script):
             "os_sigmaMin" : sigmaMin,
             "os_sigmaMax" : sigmaMax,
             "os_sampler" : patchedKDiffusionSampler.samplers_list[sampler][0],
+            "os_noise" : OverSchedForge.noise,
             "os_centreNoise" : OverSchedForge.centreNoise,
             "os_sharpNoise" : OverSchedForge.sharpNoise,
             "os_noiseStr" : noiseStrength,
