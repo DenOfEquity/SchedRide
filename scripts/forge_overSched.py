@@ -637,7 +637,7 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
                 extra_params_kwargs.pop('sigmas', None)
 
             if extraParams.get('brownian_noise', False):
-                noise_sampler = self.create_noise_sampler(x, sigmas, p)
+                noise_sampler = self.create_noise_sampler(x, sigmas, p)     #   should this use samples instead of x?
                 extra_params_kwargs['noise_sampler'] = noise_sampler
                 extra_params_kwargs['s_noise'] = 1.0
                 extra_params_kwargs['eta'] = 1.0
@@ -687,7 +687,7 @@ class OverSchedForge(scripts.Script):
     get_sigmas_backup = None
     setup_img2img_steps_backup = None
     sgm = False
-    centreNoise = True
+    centreNoise = False
     sharpNoise = False
 ##    last_scheduler = None
 
@@ -744,7 +744,7 @@ class OverSchedForge(scripts.Script):
                     addPreset = ToolButton(value="+", variant='secondary', tooltip='add preset')
                     savePreset = ToolButton(value="save", variant='secondary', tooltip='save presets')
                     noise = gr.Dropdown(["default", "Perlin (1 octave)", "Perlin (2 octaves)", "Perlin (4 octaves)", "Perlin (max octaves)"], type="value", value="default", label='noise type', scale=0)
-                    centreNoise = ToolButton(value="C", variant='primary', tooltip='Centre initial noise')
+                    centreNoise = ToolButton(value="c", variant='secondary', tooltip='Centre initial noise')
                     sharpNoise = ToolButton(value="s", variant='secondary', tooltip='Sharpen initial noise')
 
                 with gr.Row():
@@ -912,18 +912,18 @@ class OverSchedForge(scripts.Script):
         OverSchedForge.noise = noise
 
         params.extra_generation_params.update({
-            "os_enabled" : enabled,
-            "os_hiresAlt" : hiresAlt,
-            "os_sgm" : sgm,
-            "os_scheduler" : scheduler,
-            "os_action" : action,
-            "os_sigmaMin" : sigmaMin,
-            "os_sigmaMax" : sigmaMax,
-            "os_sampler" : patchedKDiffusionSampler.samplers_list[sampler][0],
-            "os_noise" : OverSchedForge.noise,
-            "os_centreNoise" : OverSchedForge.centreNoise,
-            "os_sharpNoise" : OverSchedForge.sharpNoise,
-            "os_noiseStr" : noiseStrength,
+            "os_enabled"        :   enabled,
+            "os_hiresAlt"       :   hiresAlt,
+            "os_sgm"            :   sgm,
+            "os_scheduler"      :   scheduler,
+            "os_action"         :   action,
+            "os_sigmaMin"       :   sigmaMin,
+            "os_sigmaMax"       :   sigmaMax,
+            "os_sampler"        :   patchedKDiffusionSampler.samplers_list[sampler][0],
+            "os_noise"          :   OverSchedForge.noise,
+            "os_centreNoise"    :   OverSchedForge.centreNoise,
+            "os_sharpNoise"     :   OverSchedForge.sharpNoise,
+            "os_noiseStr"       :   noiseStrength,
             })
         if scheduler == "custom":
             params.extra_generation_params.update(dict(os_custom = custom, ))
@@ -939,12 +939,15 @@ class OverSchedForge(scripts.Script):
         # This will be called before every sampling.
         # If you use highres fix, this will be called twice.
         enabled = script_args[0]
+        hiresAlt = script_args[1]
         if enabled:
-            if self.scheduler != "None":
+            if OverSchedForge.scheduler != "None":
                 K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
-            if self.hiresAlt != "default" and params.is_hr_pass == True:
+            if hiresAlt != "default" and params.is_hr_pass == True:
+                K.KDiffusionSampler.get_sigmas = patchedKDiffusionSampler.get_sigmas
                 OverSchedForge.hiresAlt = hiresAlt
                 modules.sd_samplers_common.setup_img2img_steps = patchedKDiffusionSampler.setup_img2img_steps
+
             K.KDiffusionSampler.sample = patchedKDiffusionSampler.sample
 
         return
