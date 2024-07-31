@@ -11,8 +11,12 @@ import modules.sd_samplers_common
 import modules.sd_samplers_extra
 import modules.sd_samplers_lcm
 import modules.sd_samplers_timesteps
-import torch, math
-import numpy as np
+import torch, math, random
+import torchvision.transforms.functional as TF
+from PIL import Image
+from modules.processing import get_fixed_seed
+
+import numpy
 from modules.sd_samplers_common import images_tensor_to_samples, approximation_indexes
 
 import matplotlib
@@ -226,15 +230,27 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
         return torch.cat([sigmas, sigmas.new_zeros([1])])
 
     def get_sigmas_custom(n, sigma_min, sigma_max, device='cpu'):
-        if OverSchedForge.custom[0] == '[' and OverSchedForge.custom[-1] == ']':
-            sigmasList = eval(OverSchedForge.custom)
-            xs = np.linspace(0, 1, len(sigmasList))
-            ys = np.log(sigmasList[::-1])
+        #   some safety checks ?
+        if 'import' in OverSchedForge.custom:
+            sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
+        elif 'eval' in OverSchedForge.custom:
+            sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
+        elif 'os' in OverSchedForge.custom:
+            sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
+        elif 'scripts' in OverSchedForge.custom:
+            sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
+
+        elif OverSchedForge.custom[0] == '[' and OverSchedForge.custom[-1] == ']':
+#            sigmasList = eval(OverSchedForge.custom)
+            sigmasList = [float(x) for x in OverSchedForge.custom.strip('[]').split(',')]
+
+            xs = numpy.linspace(0, 1, len(sigmasList))
+            ys = numpy.log(sigmasList[::-1])
             
-            new_xs = np.linspace(0, 1, n)
-            new_ys = np.interp(new_xs, xs, ys)
+            new_xs = numpy.linspace(0, 1, n)
+            new_ys = numpy.interp(new_xs, xs, ys)
             
-            interpolated_ys = np.exp(new_ys)[::-1].copy()
+            interpolated_ys = numpy.exp(new_ys)[::-1].copy()
             sigmas = torch.tensor(interpolated_ys, device=device)
         else:
             sigmas = torch.linspace(sigma_max, sigma_min, n, device=device)
@@ -258,13 +274,13 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
     def get_sigmas_AYS_sd15(n, sigma_min, sigma_max, device='cpu'):
         sigmas_d = [14.615, 6.475, 3.861, 2.697, 1.886, 1.396, 0.963, 0.652, 0.399, 0.152, 0.029]
 
-        xs = np.linspace(0, 1, len(sigmas_d))
-        ys = np.log(sigmas_d[::-1])
+        xs = numpy.linspace(0, 1, len(sigmas_d))
+        ys = numpy.log(sigmas_d[::-1])
         
-        new_xs = np.linspace(0, 1, n)
-        new_ys = np.interp(new_xs, xs, ys)
+        new_xs = numpy.linspace(0, 1, n)
+        new_ys = numpy.interp(new_xs, xs, ys)
         
-        interped_ys = np.exp(new_ys)[::-1].copy()
+        interped_ys = numpy.exp(new_ys)[::-1].copy()
 
         sigmas = torch.tensor(interped_ys, device=device)
 
@@ -274,13 +290,13 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
     def get_sigmas_AYS_sdXL(n, sigma_min, sigma_max, device='cpu'):
         sigmas_d = [14.615, 6.315, 3.771, 2.181, 1.342, 0.862, 0.555, 0.380, 0.234, 0.113, 0.029]
 
-        xs = np.linspace(0, 1, len(sigmas_d))
-        ys = np.log(sigmas_d[::-1])
+        xs = numpy.linspace(0, 1, len(sigmas_d))
+        ys = numpy.log(sigmas_d[::-1])
         
-        new_xs = np.linspace(0, 1, n)
-        new_ys = np.interp(new_xs, xs, ys)
+        new_xs = numpy.linspace(0, 1, n)
+        new_ys = numpy.interp(new_xs, xs, ys)
         
-        interped_ys = np.exp(new_ys)[::-1].copy()
+        interped_ys = numpy.exp(new_ys)[::-1].copy()
 
         sigmas = torch.tensor(interped_ys, device=device)
 
@@ -511,26 +527,36 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
 
         w = x.size(3)
         h = x.size(2)
+        n = x.size(0)
+        seed = p.seed
 
         detail = 0.0  #   range -1 to 1
 
         #   can modify initial noise here? yep
         if "Perlin" in OverSchedForge.noise:
-            x = patchedKDiffusionSampler.create_noisy_latents_perlin (p.seed, w, h, x.size(0), detail).to('cuda')
+            x = patchedKDiffusionSampler.create_noisy_latents_perlin (seed, w, h, n, detail).to('cuda')
           
         if OverSchedForge.centreNoise:
             for b in range(len(x)):
                 for c in range(4):
                     x[b][c] -= x[b][c].mean()
 
+        if OverSchedForge.lowDNoise:
+            for b in range(len(x)): #3,5,9
+                blur2 = TF.gaussian_blur(x[b], 3)
+                blur4 = TF.gaussian_blur(x[b], 5)
+                blur8 = TF.gaussian_blur(x[b], 9)
+                x[b] = (0.0375 * blur8) + (0.0375 * blur4) + (0.075 * blur2) + (0.985 * x[b])
 
         #   sharpen the initial noise, using trial derived values
         if OverSchedForge.sharpNoise:
-            import torchvision.transforms.functional as TF
             minDim = 1 + 2 * (min(w, h) // 2)
             for b in range(len(x)):
                 blurred = TF.gaussian_blur(x[b], minDim)
                 x[b] = 1.04*x[b] - 0.04*blurred
+
+
+
 
 #   clamp noise
 #   set all latent channels to same value
@@ -541,9 +567,9 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
             ng = ((OverSchedForge.initialNoiseG ** 0.5) * 2) - 1.0
             nb = ((OverSchedForge.initialNoiseB ** 0.5) * 2) - 1.0
 
-            imageR = torch.tensor(np.full((8,8), (nr), dtype=np.float32))
-            imageG = torch.tensor(np.full((8,8), (ng), dtype=np.float32))
-            imageB = torch.tensor(np.full((8,8), (nb), dtype=np.float32))
+            imageR = torch.tensor(numpy.full((8,8), (nr), dtype=numpy.float32))
+            imageG = torch.tensor(numpy.full((8,8), (ng), dtype=numpy.float32))
+            imageB = torch.tensor(numpy.full((8,8), (nb), dtype=numpy.float32))
             image = torch.stack((imageR, imageG, imageB), dim=0)
             image = image.unsqueeze(0)
 
@@ -553,9 +579,14 @@ class patchedKDiffusionSampler(modules.sd_samplers_common.Sampler):
                 latent *= 3.5
             latent = latent.repeat (x.size(0), 1, h, w)
 
-            #method 0: mean stays approximately the same
-            torch.lerp (x, latent, OverSchedForge.noiseStrength, out=x)
-            #method 1: mean moves toward colour
+            #   effect seems reduced with sdxl, so here's a hack
+            strength = OverSchedForge.noiseStrength
+            if shared.sd_model.is_sdxl == True:
+                strength *= 2.0 ** 0.5
+
+            #   method 0: mean stays approximately the sames
+            torch.lerp (x, latent, strength, out=x)
+            #   method 1: mean moves toward colour
             #x += latent * OverSchedForge.noiseStrength
                 
             del imageR, imageG, imageB, image, latent
@@ -689,6 +720,7 @@ class OverSchedForge(scripts.Script):
     sgm = False
     centreNoise = False
     sharpNoise = False
+    lowDNoise = False
 ##    last_scheduler = None
 
     from colourPresets import presetList
@@ -745,6 +777,7 @@ class OverSchedForge(scripts.Script):
                     savePreset = ToolButton(value="save", variant='secondary', tooltip='save presets')
                     noise = gr.Dropdown(["default", "Perlin (1 octave)", "Perlin (2 octaves)", "Perlin (4 octaves)", "Perlin (max octaves)"], type="value", value="default", label='noise type', scale=0)
                     centreNoise = ToolButton(value="c", variant='secondary', tooltip='Centre initial noise')
+                    lowDNoise = ToolButton(value="d", variant='secondary', tooltip='low discrepancy noise')
                     sharpNoise = ToolButton(value="s", variant='secondary', tooltip='Sharpen initial noise')
 
                 with gr.Row():
@@ -788,6 +821,10 @@ class OverSchedForge(scripts.Script):
                 OverSchedForge.centreNoise ^= True
                 return gr.Button.update(value=['c', 'C'][OverSchedForge.centreNoise],
                                         variant=['secondary', 'primary'][OverSchedForge.centreNoise])
+            def togglelowD ():
+                OverSchedForge.lowDNoise ^= True
+                return gr.Button.update(value=['d', 'D'][OverSchedForge.lowDNoise],
+                                        variant=['secondary', 'primary'][OverSchedForge.lowDNoise])
             def toggleSharp ():
                 OverSchedForge.sharpNoise ^= True
                 return gr.Button.update(value=['s', 'S'][OverSchedForge.sharpNoise],
@@ -813,6 +850,7 @@ class OverSchedForge(scripts.Script):
                     f.write(text)
 
             centreNoise.click(toggleCentre, inputs=[], outputs=centreNoise)
+            lowDNoise.click(togglelowD, inputs=[], outputs=lowDNoise)
             sharpNoise.click(toggleSharp, inputs=[], outputs=sharpNoise)
             addPreset.click(addColourPreset, inputs=[preset, initialNoiseR, initialNoiseG, initialNoiseB, noiseStrength], outputs=preset)
             delPreset.click(delColourPreset, inputs=preset, outputs=preset)
@@ -922,6 +960,7 @@ class OverSchedForge(scripts.Script):
             "os_sampler"        :   patchedKDiffusionSampler.samplers_list[sampler][0],
             "os_noise"          :   OverSchedForge.noise,
             "os_centreNoise"    :   OverSchedForge.centreNoise,
+            "os_lowDNoise"      :   OverSchedForge.lowDNoise,
             "os_sharpNoise"     :   OverSchedForge.sharpNoise,
             "os_noiseStr"       :   noiseStrength,
             })
@@ -931,10 +970,16 @@ class OverSchedForge(scripts.Script):
             params.extra_generation_params.update(dict(os_step = step, ))
         if noiseStrength != 0:
             params.extra_generation_params.update(dict(os_nR = initialNoiseR, os_nG = initialNoiseG, os_nB = initialNoiseB, ))
+            
+
 
         return
 
-
+    def before_process (self, params, *args):
+        enabled = args[0]
+        if enabled and params.seed == -1:
+            params.seed = get_fixed_seed(params.seed)
+        
     def process_before_every_sampling(self, params, *script_args, **kwargs):
         # This will be called before every sampling.
         # If you use highres fix, this will be called twice.
